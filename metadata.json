@@ -1,0 +1,8 @@
+{
+  "name": "SENTRY",
+  "description": "A privacy-first Windows app that understands both your PC and your whole home network, and tells you in plain language what needs fixing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
