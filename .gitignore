@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Updater signing keys. The private key must never be committed; losing it
+# means no future build can be verified as an update to this one.
+*.key
+*.key.pub
+.sentry-keys/
