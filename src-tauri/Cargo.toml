@@ -1,0 +1,58 @@
+[package]
+name = "sentry"
+version = "0.1.0"
+description = "SENTRY - privacy-first Windows and home network security"
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+name = "sentry_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-log = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+rusqlite = { version = "0.40", features = ["bundled"] }
+# Blocking HTTP: collectors already run on blocking threads, so an async
+# client would add a runtime without buying anything.
+ureq = { version = "3", features = ["json"] }
+csv = "1"
+# Async only for the port scanner, where thousands of concurrent connects
+# with individual timeouts is the whole job.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+mdns-sd = "0.21"
+socket2 = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+wmi = "0.18"
+windows-registry = "0.100"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Variant",
+    "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_System_UpdateAgent",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_System_Threading",
+    "Win32_Security",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
