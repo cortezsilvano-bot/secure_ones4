@@ -117,7 +117,6 @@ pub fn evaluate(f: &VulnerabilityFacts) -> Vec<Finding> {
         .evidence(evidence)
         .remediation(
             &format!("Update {program} to the latest version from its official source."),
-            false,
             FixRisk::Manual,
         )
         .source(SOURCE);
@@ -155,7 +154,6 @@ pub fn evaluate(f: &VulnerabilityFacts) -> Vec<Finding> {
             ])
             .remediation(
                 "Refresh the vulnerability data from the Vulnerabilities view.",
-                true,
                 FixRisk::Safe,
             )
             .source(SOURCE)
@@ -222,7 +220,6 @@ pub fn evaluate(f: &VulnerabilityFacts) -> Vec<Finding> {
             .evidence(evidence)
             .remediation(
                 "No action needed. Keeping the affected programs up to date covers these anyway.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -260,7 +257,7 @@ pub fn evaluate(f: &VulnerabilityFacts) -> Vec<Finding> {
                     format!("Programs never looked up: {unchecked}"),
                     format!("Programs with no version recorded: {}", f.programs_without_version),
                 ])
-                .remediation("Run a vulnerability data refresh to continue working through them.", true, FixRisk::Safe)
+                .remediation("Run a vulnerability data refresh to continue working through them.", FixRisk::Safe)
                 .source(SOURCE)
                 .build(),
             );

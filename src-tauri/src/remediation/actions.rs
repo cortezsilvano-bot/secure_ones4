@@ -35,7 +35,7 @@ pub fn perform(action: Action, confirmed: bool) -> Result<Outcome, RemediationEr
     // so attempting first would show the user a hex code instead of the reason.
     if action.needs_admin() && !super::elevation::is_elevated() {
         return Err(RemediationError::NeedsAdministrator(format!(
-            "\"{}\" changes a Windows security setting, which needs administrator rights.              Close SENTRY and reopen it as an administrator to make this change.",
+            "\"{}\" changes a Windows security setting, which needs administrator rights. Close SENTRY and reopen it as an administrator to make this change.",
             action.describe()
         )));
     }

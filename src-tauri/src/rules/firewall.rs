@@ -64,7 +64,6 @@ fn evaluate_profile(p: &FirewallProfile) -> Vec<Finding> {
             ])
             .remediation(
                 &format!("Turn the firewall back on for the {name} profile in Windows Security, under Firewall & network protection."),
-                true,
                 FixRisk::Safe,
             )
             .source(SOURCE)
@@ -98,7 +97,6 @@ fn evaluate_profile(p: &FirewallProfile) -> Vec<Finding> {
             ])
             .remediation(
                 &format!("Set the {name} profile's inbound default back to Block in Windows Defender Firewall advanced settings."),
-                true,
                 FixRisk::Safe,
             )
             .source(SOURCE)
@@ -131,7 +129,6 @@ fn evaluate_profile(p: &FirewallProfile) -> Vec<Finding> {
             ])
             .remediation(
                 "Re-enable firewall notifications in Windows Security, under Firewall & network protection.",
-                true,
                 FixRisk::Safe,
             )
             .source(SOURCE)

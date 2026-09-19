@@ -60,7 +60,6 @@ pub fn evaluate(f: &RouterFacts) -> Vec<Finding> {
             .evidence(f.evidence.clone())
             .remediation(
                 "If nothing on your network needs it, turning UPnP off in your router's settings closes this off.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -133,7 +132,6 @@ fn port_forward_findings(f: &RouterFacts) -> Vec<Finding> {
             .evidence(evidence)
             .remediation(
                 "Remove the port forwards you did not create deliberately, in your router's port forwarding settings.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -182,7 +180,6 @@ fn port_forward_findings(f: &RouterFacts) -> Vec<Finding> {
             .evidence(evidence)
             .remediation(
                 "Check these against what you actually use, and remove any you do not recognise.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -234,7 +231,6 @@ fn admin_interface_findings(f: &RouterFacts) -> Vec<Finding> {
             .evidence(f.evidence.clone())
             .remediation(
                 "Turn off Telnet and SSH in your router's administration settings unless you use them.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)

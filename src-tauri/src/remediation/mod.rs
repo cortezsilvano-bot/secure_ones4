@@ -21,107 +21,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::database::Database;
-use crate::findings::FixRisk;
 
 pub mod actions;
 pub mod elevation;
 
-/// The complete set of changes SENTRY can make.
-///
-/// Adding a variant is the only way to add a capability, which makes the
-/// privileged surface reviewable in one place.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Action {
-    /// Defender: scan USB sticks and external drives.
-    EnableRemovableDriveScanning,
-    /// Defender: look inside .zip and similar archives.
-    EnableArchiveScanning,
-    /// Defender: scan PowerShell and other scripts.
-    EnableScriptScanning,
-    /// Defender: block potentially unwanted applications rather than only
-    /// logging them.
-    EnablePuaBlocking,
-    /// Defender: start a quick scan now.
-    RunQuickScan,
-    /// Defender: fetch the latest malware definitions.
-    UpdateDefinitions,
-}
-
-impl Action {
-    /// What the user is told will happen.
-    pub fn describe(&self) -> &'static str {
-        match self {
-            Action::EnableRemovableDriveScanning => {
-                "Turn on scanning of USB sticks and external drives"
-            }
-            Action::EnableArchiveScanning => "Turn on scanning inside zip files and archives",
-            Action::EnableScriptScanning => "Turn on scanning of scripts",
-            Action::EnablePuaBlocking => {
-                "Block potentially unwanted applications instead of only recording them"
-            }
-            Action::RunQuickScan => "Run a quick malware scan now",
-            Action::UpdateDefinitions => "Download the latest malware definitions",
-        }
-    }
-
-    /// How risky the change is.
-    ///
-    /// Everything here is `Safe`: each one turns a protection *on* or asks
-    /// Defender to do something it already does on a schedule, and each is
-    /// reversible through Windows' own settings. Anything that weakens a
-    /// protection, edits the registry directly, or cannot be reversed does not
-    /// belong in this enum at all -- it belongs in the instructions SENTRY
-    /// gives the user.
-    pub fn risk(&self) -> FixRisk {
-        match self {
-            Action::EnableRemovableDriveScanning
-            | Action::EnableArchiveScanning
-            | Action::EnableScriptScanning
-            | Action::EnablePuaBlocking
-            | Action::RunQuickScan
-            | Action::UpdateDefinitions => FixRisk::Safe,
-        }
-    }
-
-    /// Whether Windows will refuse this without administrator rights.
-    pub fn needs_admin(&self) -> bool {
-        match self {
-            // Changing Defender policy is an administrative operation.
-            Action::EnableRemovableDriveScanning
-            | Action::EnableArchiveScanning
-            | Action::EnableScriptScanning
-            | Action::EnablePuaBlocking => true,
-            // Starting a scan and updating definitions are not.
-            Action::RunQuickScan | Action::UpdateDefinitions => false,
-        }
-    }
-
-    /// How to reverse it, for the history record.
-    pub fn undo_hint(&self) -> Option<&'static str> {
-        match self {
-            Action::EnableRemovableDriveScanning => {
-                Some("Set-MpPreference -DisableRemovableDriveScanning $true")
-            }
-            Action::EnableArchiveScanning => Some("Set-MpPreference -DisableArchiveScanning $true"),
-            Action::EnableScriptScanning => Some("Set-MpPreference -DisableScriptScanning $true"),
-            Action::EnablePuaBlocking => Some("Set-MpPreference -PUAProtection AuditMode"),
-            // Neither changes a setting, so neither has anything to undo.
-            Action::RunQuickScan | Action::UpdateDefinitions => None,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Action::EnableRemovableDriveScanning => "enable_removable_drive_scanning",
-            Action::EnableArchiveScanning => "enable_archive_scanning",
-            Action::EnableScriptScanning => "enable_script_scanning",
-            Action::EnablePuaBlocking => "enable_pua_blocking",
-            Action::RunQuickScan => "run_quick_scan",
-            Action::UpdateDefinitions => "update_definitions",
-        }
-    }
-}
+// `Action` lives in `findings` so a Finding can name the fix that resolves
+// it without this module and that one depending on each other.
+pub use crate::findings::Action;
 
 /// The result of attempting a fix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +105,9 @@ pub fn finish(db: &Database, id: i64, status: &str, detail: &str) -> rusqlite::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the tests assert on risk levels; the module itself no longer
+    // mentions FixRisk directly.
+    use crate::findings::FixRisk;
 
     const ALL: &[Action] = &[
         Action::EnableRemovableDriveScanning,

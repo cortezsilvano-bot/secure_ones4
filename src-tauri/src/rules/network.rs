@@ -125,7 +125,6 @@ pub fn evaluate_ports(f: &LocalPortFacts) -> Vec<Finding> {
             .evidence(evidence)
             .remediation(
                 "If you do not need this service, turn it off. If you do, make sure it requires a strong password and is not reachable from outside your home.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -233,7 +232,6 @@ pub fn evaluate_devices(f: &DeviceFacts) -> Vec<Finding> {
             .evidence(evidence)
             .remediation(
                 "Open Devices and mark the ones you recognise as trusted.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -263,7 +261,6 @@ pub fn evaluate_devices(f: &DeviceFacts) -> Vec<Finding> {
             ])
             .remediation(
                 "Download the vulnerability and device data from the dashboard.",
-                true,
                 FixRisk::Safe,
             )
             .source(SOURCE)

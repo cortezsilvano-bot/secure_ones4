@@ -71,6 +71,23 @@ export type Confidence = 'confirmed' | 'likely' | 'potential';
 export type FixRisk = 'safe' | 'caution' | 'manual';
 export type FindingStatus = 'open' | 'resolved' | 'dismissed' | 'allowlisted';
 
+/** Mirrors `Action` in src-tauri/src/findings/mod.rs. */
+export type FixAction =
+  | 'enable_removable_drive_scanning'
+  | 'enable_archive_scanning'
+  | 'enable_script_scanning'
+  | 'enable_pua_blocking'
+  | 'run_quick_scan'
+  | 'update_definitions';
+
+export interface FixResult {
+  succeeded: boolean;
+  detail: string;
+  undoHint: string | null;
+  /** True when the change would work with administrator rights. */
+  needsAdmin: boolean;
+}
+
 /** Mirrors `Finding` in src-tauri/src/findings/mod.rs. */
 export interface Finding {
   id: string;
@@ -83,6 +100,8 @@ export interface Finding {
   whyItMatters: string;
   affectedAsset: string | null;
   remediation: string | null;
+  /** The fix SENTRY can apply. Null means you have to do it yourself. */
+  fixAction: FixAction | null;
   autoFix: boolean;
   autoFixRisk: FixRisk | null;
   evidence: string[];

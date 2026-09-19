@@ -12,6 +12,9 @@ import { useScan } from './hooks/useScan';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  // Set when a dashboard tile is opened, so Findings arrives filtered to
+  // that area rather than showing everything and leaving the user to look.
+  const [focusCategory, setFocusCategory] = useState<string | null>(null);
 
   // One scan drives every view, so the sidebar, dashboard and findings list can
   // never disagree about what was found.
@@ -19,12 +22,29 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-slate-950 font-sans">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} scan={scan} />
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={(tab) => {
+          setFocusCategory(null);
+          setActiveTab(tab);
+        }}
+        scan={scan}
+      />
 
       {activeTab === 'dashboard' ? (
-        <Dashboard scan={scan} />
+        <Dashboard
+          scan={scan}
+          onOpenCategory={(category) => {
+            setFocusCategory(category);
+            setActiveTab('findings');
+          }}
+        />
       ) : activeTab === 'findings' ? (
-        <FindingsView scan={scan} />
+        <FindingsView
+          scan={scan}
+          focusCategory={focusCategory}
+          onClearFocus={() => setFocusCategory(null)}
+        />
       ) : activeTab === 'devices' ? (
         <DevicesView />
       ) : activeTab === 'timeline' ? (

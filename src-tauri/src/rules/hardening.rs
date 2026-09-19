@@ -22,7 +22,6 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 .evidence(f.evidence.clone())
                 .remediation(
                     "Turn off SMB 1.0/CIFS File Sharing Support in Windows Features, then restart.",
-                    true,
                     FixRisk::Caution,
                 )
                 .reference("https://learn.microsoft.com/windows-server/storage/file-server/troubleshoot/detect-enable-and-disable-smbv1-v2-v3")
@@ -45,7 +44,6 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 .evidence(f.evidence.clone())
                 .remediation(
                     "Turn off SMB 1.0/CIFS Client in Windows Features, then restart.",
-                    true,
                     FixRisk::Caution,
                 )
                 .source(SOURCE)
@@ -66,7 +64,6 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 .evidence(f.evidence.clone())
                 .remediation(
                     "Turn User Account Control back on in Control Panel, under User Accounts. A restart is required.",
-                    false,
                     FixRisk::Manual,
                 )
                 .source(SOURCE)
@@ -92,7 +89,6 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
             .evidence(f.evidence.clone())
             .remediation(
                 "Set User Account Control back to its default notification level in Control Panel.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -140,7 +136,6 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 } else {
                     "If you do not use Remote Desktop, turn it off in Settings, under System, Remote Desktop."
                 },
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -161,7 +156,6 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 .evidence(f.evidence.clone())
                 .remediation(
                     "Disable AutoRun for all drive types in Group Policy, or set NoDriveTypeAutoRun to 0xFF.",
-                    true,
                     FixRisk::Safe,
                 )
                 .source(SOURCE)

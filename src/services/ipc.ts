@@ -12,6 +12,8 @@ import type {
   DeletionSummary,
   DeviceList,
   FeedStatus,
+  FixAction,
+  FixResult,
   Known,
   PrivacyReport,
   RefreshSummary,
@@ -198,4 +200,18 @@ export async function deleteLocalData(): Promise<DeletionSummary> {
 export async function deleteEverything(): Promise<DeletionSummary> {
   if (!hasBackend()) throw new Error(NO_BACKEND);
   return invoke<DeletionSummary>('delete_everything');
+}
+
+// --- Applying fixes ---------------------------------------------------------
+
+/**
+ * Apply one fix.
+ *
+ * `action` is a value from a fixed set the backend defines; there is no way to
+ * ask it to run something arbitrary. A fix needing administrator rights is
+ * refused with an explanation rather than attempted and failed.
+ */
+export async function applyFix(action: FixAction, findingId?: string): Promise<FixResult> {
+  if (!hasBackend()) throw new Error(NO_BACKEND);
+  return invoke<FixResult>('apply_fix', { action, findingId, confirmed: true });
 }

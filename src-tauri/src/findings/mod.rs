@@ -62,6 +62,103 @@ pub enum FindingStatus {
     Allowlisted,
 }
 
+/// The complete set of changes SENTRY can make.
+///
+/// Adding a variant is the only way to add a capability, which makes the
+/// privileged surface reviewable in one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    /// Defender: scan USB sticks and external drives.
+    EnableRemovableDriveScanning,
+    /// Defender: look inside .zip and similar archives.
+    EnableArchiveScanning,
+    /// Defender: scan PowerShell and other scripts.
+    EnableScriptScanning,
+    /// Defender: block potentially unwanted applications rather than only
+    /// logging them.
+    EnablePuaBlocking,
+    /// Defender: start a quick scan now.
+    RunQuickScan,
+    /// Defender: fetch the latest malware definitions.
+    UpdateDefinitions,
+}
+
+impl Action {
+    /// What the user is told will happen.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Action::EnableRemovableDriveScanning => {
+                "Turn on scanning of USB sticks and external drives"
+            }
+            Action::EnableArchiveScanning => "Turn on scanning inside zip files and archives",
+            Action::EnableScriptScanning => "Turn on scanning of scripts",
+            Action::EnablePuaBlocking => {
+                "Block potentially unwanted applications instead of only recording them"
+            }
+            Action::RunQuickScan => "Run a quick malware scan now",
+            Action::UpdateDefinitions => "Download the latest malware definitions",
+        }
+    }
+
+    /// How risky the change is.
+    ///
+    /// Everything here is `Safe`: each one turns a protection *on* or asks
+    /// Defender to do something it already does on a schedule, and each is
+    /// reversible through Windows' own settings. Anything that weakens a
+    /// protection, edits the registry directly, or cannot be reversed does not
+    /// belong in this enum at all -- it belongs in the instructions SENTRY
+    /// gives the user.
+    pub fn risk(&self) -> FixRisk {
+        match self {
+            Action::EnableRemovableDriveScanning
+            | Action::EnableArchiveScanning
+            | Action::EnableScriptScanning
+            | Action::EnablePuaBlocking
+            | Action::RunQuickScan
+            | Action::UpdateDefinitions => FixRisk::Safe,
+        }
+    }
+
+    /// Whether Windows will refuse this without administrator rights.
+    pub fn needs_admin(&self) -> bool {
+        match self {
+            // Changing Defender policy is an administrative operation.
+            Action::EnableRemovableDriveScanning
+            | Action::EnableArchiveScanning
+            | Action::EnableScriptScanning
+            | Action::EnablePuaBlocking => true,
+            // Starting a scan and updating definitions are not.
+            Action::RunQuickScan | Action::UpdateDefinitions => false,
+        }
+    }
+
+    /// How to reverse it, for the history record.
+    pub fn undo_hint(&self) -> Option<&'static str> {
+        match self {
+            Action::EnableRemovableDriveScanning => {
+                Some("Set-MpPreference -DisableRemovableDriveScanning $true")
+            }
+            Action::EnableArchiveScanning => Some("Set-MpPreference -DisableArchiveScanning $true"),
+            Action::EnableScriptScanning => Some("Set-MpPreference -DisableScriptScanning $true"),
+            Action::EnablePuaBlocking => Some("Set-MpPreference -PUAProtection AuditMode"),
+            // Neither changes a setting, so neither has anything to undo.
+            Action::RunQuickScan | Action::UpdateDefinitions => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Action::EnableRemovableDriveScanning => "enable_removable_drive_scanning",
+            Action::EnableArchiveScanning => "enable_archive_scanning",
+            Action::EnableScriptScanning => "enable_script_scanning",
+            Action::EnablePuaBlocking => "enable_pua_blocking",
+            Action::RunQuickScan => "run_quick_scan",
+            Action::UpdateDefinitions => "update_definitions",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
@@ -77,6 +174,12 @@ pub struct Finding {
     pub why_it_matters: String,
     pub affected_asset: Option<String>,
     pub remediation: Option<String>,
+    /// The fix that resolves this, when SENTRY can actually apply one.
+    ///
+    /// `None` means the user has to do it themselves. It is deliberately an
+    /// `Action` rather than a boolean: a finding cannot advertise a fix that
+    /// does not exist, because there is no way to name one.
+    pub fix_action: Option<Action>,
     pub auto_fix: bool,
     pub auto_fix_risk: Option<FixRisk>,
     /// Verbatim observations. Never prose, never a claim about a check that
@@ -120,6 +223,7 @@ impl FindingBuilder {
                 why_it_matters: String::new(),
                 affected_asset: None,
                 remediation: None,
+                fix_action: None,
                 auto_fix: false,
                 auto_fix_risk: None,
                 evidence: Vec::new(),
@@ -151,10 +255,22 @@ impl FindingBuilder {
         self
     }
 
-    pub fn remediation(mut self, text: &str, auto_fix: bool, risk: FixRisk) -> Self {
+    /// What the user should do. Describing a fix does not imply SENTRY can
+    /// apply it -- see `fixable_with`.
+    pub fn remediation(mut self, text: &str, risk: FixRisk) -> Self {
         self.finding.remediation = Some(text.to_string());
-        self.finding.auto_fix = auto_fix;
         self.finding.auto_fix_risk = Some(risk);
+        self
+    }
+
+    /// Declare that SENTRY can fix this itself, with the action that does it.
+    ///
+    /// The only way `auto_fix` is ever set, so an offered fix always has an
+    /// implementation behind it.
+    pub fn fixable_with(mut self, action: Action) -> Self {
+        self.finding.fix_action = Some(action);
+        self.finding.auto_fix = true;
+        self.finding.auto_fix_risk = Some(action.risk());
         self
     }
 
@@ -214,6 +330,45 @@ mod tests {
             "same rule on different assets must not collide"
         );
         assert!(a.starts_with("DEF-001-"));
+    }
+
+    #[test]
+    fn a_finding_cannot_offer_a_fix_without_one_behind_it() {
+        // The bug this prevents: 16 findings once advertised an automatic fix
+        // while only a handful had an implementation, so most of those buttons
+        // would have done nothing. `auto_fix` is now settable only by naming
+        // the Action that performs it.
+        let described_only = FindingBuilder::new("X", "T", Severity::Warning, "t")
+            .what("w")
+            .evidence(["e".to_string()])
+            .remediation("Do it yourself in Windows Settings.", FixRisk::Manual)
+            .build();
+
+        assert!(
+            !described_only.auto_fix,
+            "describing a fix must not advertise one"
+        );
+        assert!(described_only.fix_action.is_none());
+        assert!(
+            described_only.remediation.is_some(),
+            "the advice is still shown"
+        );
+
+        let applicable = FindingBuilder::new("Y", "T", Severity::Warning, "t")
+            .what("w")
+            .evidence(["e".to_string()])
+            .remediation("Turn archive scanning back on.", FixRisk::Safe)
+            .fixable_with(Action::EnableArchiveScanning)
+            .build();
+
+        assert!(applicable.auto_fix);
+        assert_eq!(applicable.fix_action, Some(Action::EnableArchiveScanning));
+        // The risk shown always comes from the action itself, never a claim
+        // made alongside it.
+        assert_eq!(
+            applicable.auto_fix_risk,
+            Some(Action::EnableArchiveScanning.risk())
+        );
     }
 
     #[test]

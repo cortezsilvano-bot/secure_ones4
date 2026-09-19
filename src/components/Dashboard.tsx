@@ -22,7 +22,13 @@ const COVERAGE_STYLE: Record<Coverage, string> = {
   incomplete: 'text-slate-400 bg-slate-400/10 border-slate-400/20',
 };
 
-export function Dashboard({ scan }: { scan: ScanState }) {
+export function Dashboard({
+  scan,
+  onOpenCategory,
+}: {
+  scan: ScanState;
+  onOpenCategory?: (category: string) => void;
+}) {
   const { dashboard, scanning, error, rescan } = scan;
 
   return (
@@ -105,7 +111,7 @@ export function Dashboard({ scan }: { scan: ScanState }) {
         <div className="grid grid-cols-12 gap-6">
           <div className="col-span-8 space-y-4">
             <h2 className="text-slate-200 font-medium">Security overview</h2>
-            <OverviewGrid tiles={dashboard?.tiles ?? []} />
+            <OverviewGrid tiles={dashboard?.tiles ?? []} onOpen={onOpenCategory} />
           </div>
 
           <div className="col-span-4 space-y-4">

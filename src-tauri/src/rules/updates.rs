@@ -75,7 +75,6 @@ pub fn evaluate(f: &UpdateFacts) -> Vec<Finding> {
             .evidence(evidence)
             .remediation(
                 "Install the pending updates from Settings, under Windows Update.",
-                false,
                 FixRisk::Manual,
             )
             .source(SOURCE)
@@ -101,7 +100,7 @@ pub fn evaluate(f: &UpdateFacts) -> Vec<Finding> {
                 "COM interface: ISystemInformation (wuapi.dll)".to_string(),
                 "RebootRequired: true".to_string(),
             ])
-            .remediation("Restart this PC when convenient.", false, FixRisk::Manual)
+            .remediation("Restart this PC when convenient.", FixRisk::Manual)
             .source(SOURCE)
             .build(),
         );
@@ -136,7 +135,6 @@ pub fn evaluate(f: &UpdateFacts) -> Vec<Finding> {
                     ])
                     .remediation(
                         "Open Settings, then Windows Update, and select Check for updates. If it fails, the Windows Update service may be stopped or blocked by policy.",
-                        false,
                         FixRisk::Manual,
                     )
                     .source(SOURCE)
@@ -160,7 +158,6 @@ pub fn evaluate(f: &UpdateFacts) -> Vec<Finding> {
                 ])
                 .remediation(
                     "Open Settings, then Windows Update, and select Check for updates.",
-                    false,
                     FixRisk::Manual,
                 )
                 .source(SOURCE)

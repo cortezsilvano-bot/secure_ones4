@@ -1,13 +1,39 @@
 import React from 'react';
-import { Check, Loader2 } from 'lucide-react';
+import { Check, Loader2, X } from 'lucide-react';
 
 import type { ScanState } from '../hooks/useScan';
 import { isKnown } from '../types';
 import { FindingCard } from './FindingCard';
 
-export function FindingsView({ scan }: { scan: ScanState }) {
-  const { dashboard, scanning } = scan;
-  const findings = dashboard?.findings ?? [];
+export function FindingsView({
+  scan,
+  focusCategory,
+  onClearFocus,
+}: {
+  scan: ScanState;
+  /** Set when arriving from a dashboard tile. */
+  focusCategory?: string | null;
+  onClearFocus?: () => void;
+}) {
+  const { dashboard, scanning, rescan } = scan;
+  const all = dashboard?.findings ?? [];
+
+  // Tile categories and finding categories are not the same words, so the
+  // engine's mapping is mirrored here rather than matched on by string.
+  const CATEGORIES: Record<string, string[]> = {
+    Desktop: ['System Configuration'],
+    Network: ['Network'],
+    Router: ['Router'],
+    Devices: ['Devices'],
+    Vulnerabilities: ['Vulnerabilities'],
+    Malware: ['Malware Protection'],
+    Firewall: ['Firewall'],
+    Updates: ['Updates'],
+    OpenPorts: ['Open Ports'],
+  };
+
+  const wanted = focusCategory ? CATEGORIES[focusCategory] : undefined;
+  const findings = wanted ? all.filter((f) => wanted.includes(f.category)) : all;
   const gaps = dashboard?.score.gaps ?? [];
 
   return (
@@ -18,6 +44,15 @@ export function FindingsView({ scan }: { scan: ScanState }) {
           <p className="text-slate-400">
             Review and resolve security alerts across your network.
           </p>
+          {focusCategory && (
+            <button
+              onClick={onClearFocus}
+              className="mt-3 inline-flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300 bg-blue-500/10 border border-blue-500/20 rounded-full px-3 py-1 transition-colors"
+            >
+              Showing {focusCategory} only
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         {scanning && findings.length === 0 ? (
@@ -38,7 +73,7 @@ export function FindingsView({ scan }: { scan: ScanState }) {
         ) : (
           <div className="space-y-4">
             {findings.map((finding) => (
-              <FindingCard key={finding.id} finding={finding} />
+              <FindingCard key={finding.id} finding={finding} onFixed={rescan} />
             ))}
           </div>
         )}

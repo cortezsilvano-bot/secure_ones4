@@ -137,7 +137,6 @@ fn evaluate_interface(iface: &NetworkInterface) -> Vec<Finding> {
         .evidence(evidence)
         .remediation(
             "If you did not set this DNS server yourself, check your router's settings and this PC's network adapter settings.",
-            false,
             FixRisk::Manual,
         )
         .source(SOURCE)

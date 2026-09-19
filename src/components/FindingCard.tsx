@@ -1,16 +1,19 @@
 import React, { useState } from 'react';
 import {
+  Check,
   ChevronDown,
   ChevronUp,
   ExternalLink,
   FileCode2,
   Info,
+  Loader2,
   ShieldAlert,
   ShieldCheck,
   Wrench,
 } from 'lucide-react';
 
-import type { Confidence, Finding, FixRisk, Severity } from '../types';
+import { applyFix } from '../services/ipc';
+import type { Confidence, Finding, FixResult, FixRisk, Severity } from '../types';
 
 const SEVERITY_COLOR: Record<Severity, string> = {
   Critical: 'text-rose-500',
@@ -50,8 +53,37 @@ function severityIcon(finding: Finding) {
   }
 }
 
-export function FindingCard({ finding }: { finding: Finding }) {
+export function FindingCard({
+  finding,
+  onFixed,
+}: {
+  finding: Finding;
+  /** Called after a successful fix so the caller can re-scan. */
+  onFixed?: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  const [result, setResult] = useState<FixResult | null>(null);
+
+  const runFix = async () => {
+    if (!finding.fixAction) return;
+    setFixing(true);
+    setResult(null);
+    try {
+      const outcome = await applyFix(finding.fixAction, finding.id);
+      setResult(outcome);
+      if (outcome.succeeded) onFixed?.();
+    } catch (e) {
+      setResult({
+        succeeded: false,
+        detail: e instanceof Error ? e.message : String(e),
+        undoHint: null,
+        needsAdmin: false,
+      });
+    } finally {
+      setFixing(false);
+    }
+  };
 
   const Icon = severityIcon(finding);
   const color = finding.status === 'resolved' ? 'text-emerald-500' : SEVERITY_COLOR[finding.severity];
@@ -106,16 +138,57 @@ export function FindingCard({ finding }: { finding: Finding }) {
               <p className="text-xs text-slate-500 mt-1.5">{FIX_RISK_NOTE[finding.autoFixRisk]}</p>
             )}
           </div>
-          {finding.autoFix && (
+          {/* Only shown when a real action backs it: `fixAction` is set by the
+              backend and cannot name a fix that does not exist. */}
+          {finding.fixAction && !result?.succeeded && (
             <button
-              disabled
-              title="Automatic fixes arrive in a later version."
-              className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-500 border border-slate-700 rounded-lg text-sm font-medium cursor-not-allowed shrink-0"
+              onClick={runFix}
+              disabled={fixing}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors shrink-0"
             >
-              <Wrench className="w-4 h-4" />
-              Auto-fix
+              {fixing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Wrench className="w-4 h-4" />
+              )}
+              {fixing ? 'Fixing...' : 'Fix this'}
             </button>
           )}
+        </div>
+      )}
+
+      {result && (
+        <div
+          className={`mt-3 p-3 rounded-lg border text-sm flex items-start gap-2 ${
+            result.succeeded
+              ? 'bg-emerald-500/10 border-emerald-500/20'
+              : result.needsAdmin
+                ? 'bg-amber-500/10 border-amber-500/20'
+                : 'bg-rose-500/10 border-rose-500/20'
+          }`}
+        >
+          {result.succeeded ? (
+            <Check className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+          ) : (
+            <Info
+              className={`w-4 h-4 shrink-0 mt-0.5 ${
+                result.needsAdmin ? 'text-amber-500' : 'text-rose-500'
+              }`}
+            />
+          )}
+          <div className="min-w-0">
+            <p className="text-slate-300">{result.detail}</p>
+            {result.succeeded && result.undoHint && (
+              <p className="text-slate-500 text-xs mt-1">
+                To undo: <span className="font-mono">{result.undoHint}</span>
+              </p>
+            )}
+            {result.succeeded && (
+              <p className="text-slate-500 text-xs mt-1">
+                Run a scan to confirm the change took effect.
+              </p>
+            )}
+          </div>
         </div>
       )}
 
