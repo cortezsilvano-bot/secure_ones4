@@ -8,6 +8,7 @@
 
 pub mod dashboard;
 pub mod devices;
+pub mod help;
 pub mod history;
 pub mod remediation;
 pub mod router;

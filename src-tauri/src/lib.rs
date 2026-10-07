@@ -19,6 +19,7 @@ use tauri::{Emitter, Manager};
 
 /// Handles shared across commands.
 pub struct AppState {
+    pub router: Arc<collectors::network::router::coordinator::RouterCoordinator>,
     pub db: Arc<Database>,
     /// Where the store lives, shown verbatim in the privacy report.
     pub db_path: std::path::PathBuf,
@@ -53,8 +54,11 @@ pub fn run() {
 
             log::info!("store ready at schema version {}", db.schema_version()?);
             let db = Arc::new(db);
+            let router =
+                Arc::new(collectors::network::router::coordinator::RouterCoordinator::default());
 
             app.manage(AppState {
+                router: router.clone(),
                 db: db.clone(),
                 db_path: db_path.clone(),
                 refresh: Default::default(),
@@ -62,6 +66,7 @@ pub fn run() {
             });
 
             build_tray(app.handle())?;
+            spawn_network_watch(app.handle().clone(), router);
             spawn_monitor(app.handle().clone(), db);
 
             Ok(())
@@ -86,6 +91,12 @@ pub fn run() {
             ipc::devices::set_device_trust,
             ipc::devices::rename_device,
             ipc::router::get_router_status,
+            ipc::router::get_router_history,
+            ipc::router::scan_router,
+            ipc::router::scan_asus_router,
+            ipc::router::get_router_environment,
+            ipc::router::select_router,
+            ipc::router::cancel_router_scan,
             ipc::history::get_timeline,
             ipc::history::get_scan_history,
             ipc::history::get_privacy_report,
@@ -97,6 +108,7 @@ pub fn run() {
             ipc::remediation::list_available_fixes,
             ipc::remediation::apply_fix,
             ipc::remediation::get_remediation_history,
+            ipc::help::open_help_target,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SENTRY");
@@ -166,12 +178,19 @@ fn spawn_monitor(app: tauri::AppHandle, db: Arc<Database>) {
             tokio::time::sleep(engine::monitor::SCAN_INTERVAL).await;
 
             let db = db.clone();
-            let Ok(dashboard) =
-                tauri::async_runtime::spawn_blocking(move || engine::scan(&db)).await
+            let router = app.state::<AppState>().router.clone();
+            let check = router.clone();
+            let Ok(dashboard) = tauri::async_runtime::spawn_blocking(move || {
+                engine::scan_with_router(&db, &router)
+            })
+            .await
             else {
                 log::warn!("background scan failed");
                 continue;
             };
+            if dashboard.router_generation != check.generation() {
+                continue;
+            }
 
             // Let an open window update itself rather than showing stale results.
             let _ = app.emit("background-scan-completed", &dashboard);
@@ -190,6 +209,28 @@ fn spawn_monitor(app: tauri::AppHandle, db: Arc<Database>) {
                     log::warn!("could not show a notification: {e}");
                 }
             }
+        }
+    });
+}
+
+/// Passive network checks invalidate current router results even while the UI is idle.
+fn spawn_network_watch(
+    app: tauri::AppHandle,
+    router: Arc<collectors::network::router::coordinator::RouterCoordinator>,
+) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_generation = 0;
+        loop {
+            let coordinator = router.clone();
+            if let Ok(environment) =
+                tauri::async_runtime::spawn_blocking(move || coordinator.refresh_network()).await
+            {
+                if environment.generation != last_generation {
+                    last_generation = environment.generation;
+                    let _ = app.emit("router-context-changed", &environment);
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     });
 }

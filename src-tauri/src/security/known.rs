@@ -29,6 +29,12 @@ pub enum Known<T> {
     Unavailable(String),
 }
 
+impl<T> Default for Known<T> {
+    fn default() -> Self {
+        Self::NotScanned
+    }
+}
+
 impl<T> Known<T> {
     pub fn is_known(&self) -> bool {
         matches!(self, Known::Known(_))

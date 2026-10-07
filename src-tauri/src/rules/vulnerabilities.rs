@@ -5,7 +5,7 @@
 //! that says "update this, here is why, here is the worst of it". The full CVE
 //! list stays in the evidence.
 
-use crate::findings::{Confidence, Finding, FindingBuilder, FixRisk, Severity};
+use crate::findings::{Confidence, Finding, FindingBuilder, Severity};
 use crate::vulnerabilities::assess::VulnerabilityFacts;
 use crate::vulnerabilities::matcher::VulnerabilityMatch;
 
@@ -116,8 +116,7 @@ pub fn evaluate(f: &VulnerabilityFacts) -> Vec<Finding> {
         .asset(&program)
         .evidence(evidence)
         .remediation(
-            &format!("Update {program} to the latest version from its official source."),
-            FixRisk::Manual,
+            &format!("Update {program} to the latest version from its official source.")
         )
         .source(SOURCE);
 
@@ -153,8 +152,7 @@ pub fn evaluate(f: &VulnerabilityFacts) -> Vec<Finding> {
                 format!("Last refreshed: {age} day(s) ago"),
             ])
             .remediation(
-                "Refresh the vulnerability data from the Vulnerabilities view.",
-                FixRisk::Safe,
+                "Refresh the vulnerability data from the Vulnerabilities view."
             )
             .source(SOURCE)
             .build(),
@@ -219,8 +217,7 @@ pub fn evaluate(f: &VulnerabilityFacts) -> Vec<Finding> {
             .confidence(Confidence::Confirmed)
             .evidence(evidence)
             .remediation(
-                "No action needed. Keeping the affected programs up to date covers these anyway.",
-                FixRisk::Manual,
+                "No action needed. Keeping the affected programs up to date covers these anyway."
             )
             .source(SOURCE)
             .build(),
@@ -257,7 +254,7 @@ pub fn evaluate(f: &VulnerabilityFacts) -> Vec<Finding> {
                     format!("Programs never looked up: {unchecked}"),
                     format!("Programs with no version recorded: {}", f.programs_without_version),
                 ])
-                .remediation("Run a vulnerability data refresh to continue working through them.", FixRisk::Safe)
+                .remediation("Run a vulnerability data refresh to continue working through them.")
                 .source(SOURCE)
                 .build(),
             );

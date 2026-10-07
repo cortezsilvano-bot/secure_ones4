@@ -13,11 +13,18 @@ use crate::AppState;
 #[tauri::command]
 pub async fn run_scan(state: State<'_, AppState>) -> Result<Dashboard, String> {
     let db = state.db.clone();
+    let router = state.router.clone();
+    let check = router.clone();
 
-    tauri::async_runtime::spawn_blocking(move || engine::scan(&db))
-        .await
-        .map_err(|e| {
-            log::error!("scan task failed: {e}");
-            "The scan stopped unexpectedly. See the application log for details.".to_string()
-        })
+    let dashboard =
+        tauri::async_runtime::spawn_blocking(move || engine::scan_with_router(&db, &router))
+            .await
+            .map_err(|e| {
+                log::error!("scan task failed: {e}");
+                "The scan stopped unexpectedly. See the application log for details.".to_string()
+            })?;
+    if dashboard.router_generation != check.generation() {
+        return Err("The network or selected router changed. Run a new scan.".into());
+    }
+    Ok(dashboard)
 }

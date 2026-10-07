@@ -6,7 +6,7 @@
 //! the same failure as inventing a clean bill of health from it.
 
 use crate::collectors::defender::DefenderFacts;
-use crate::findings::{Action, Confidence, Finding, FindingBuilder, FixRisk, Severity};
+use crate::findings::{Action, Confidence, Finding, FindingBuilder, HelpTarget, Severity};
 
 const SOURCE: &str = "windows.defender";
 const CATEGORY: &str = "Malware Protection";
@@ -41,9 +41,9 @@ pub fn evaluate(f: &DefenderFacts) -> Vec<Finding> {
                 )
                 .evidence(vec![WMI_CLASS.to_string(), "AMServiceEnabled: false".to_string()])
                 .remediation(
-                    "Start Microsoft Defender Antivirus, or confirm another antivirus product is protecting this PC.",
-                    FixRisk::Manual,
+                    "Start Microsoft Defender Antivirus, or confirm another antivirus product is protecting this PC."
                 )
+                .help(HelpTarget::VirusProtectionSettings)
                 .source(SOURCE)
                 .build(),
         );
@@ -69,9 +69,9 @@ pub fn evaluate(f: &DefenderFacts) -> Vec<Finding> {
                     ),
                 ])
                 .remediation(
-                    "Turn on real-time protection in Windows Security, under Virus & threat protection.",
-                    FixRisk::Safe,
+                    "Turn on real-time protection in Windows Security, under Virus & threat protection."
                 )
+                .help(HelpTarget::VirusProtectionSettings)
                 .source(SOURCE)
                 .build(),
         );
@@ -105,8 +105,7 @@ pub fn evaluate(f: &DefenderFacts) -> Vec<Finding> {
                 ),
             ])
             .remediation(
-                "Open your other antivirus product and confirm it is enabled and current.",
-                FixRisk::Manual,
+                "Open your other antivirus product and confirm it is enabled and current."
             )
             .source(SOURCE)
             .build(),
@@ -144,9 +143,9 @@ pub fn evaluate(f: &DefenderFacts) -> Vec<Finding> {
                     )
                     .evidence(evidence)
                     .remediation(
-                        "Check for updates in Windows Security, under Virus & threat protection, Protection updates.",
-                        FixRisk::Safe,
+                        "Check for updates in Windows Security, under Virus & threat protection, Protection updates."
                     )
+                    .help(HelpTarget::ProtectionUpdates)
                     .fixable_with(Action::UpdateDefinitions)
                     .source(SOURCE)
                     .build(),
@@ -165,9 +164,9 @@ pub fn evaluate(f: &DefenderFacts) -> Vec<Finding> {
                 )
                 .evidence(vec![WMI_CLASS.to_string(), "IsTamperProtected: false".to_string()])
                 .remediation(
-                    "Turn on Tamper Protection in Windows Security, under Virus & threat protection, Manage settings.",
-                    FixRisk::Manual,
+                    "Turn on Tamper Protection in Windows Security, under Virus & threat protection, Manage settings."
                 )
+                .help(HelpTarget::VirusProtectionSettings)
                 .source(SOURCE)
                 .build(),
         );
@@ -184,9 +183,9 @@ pub fn evaluate(f: &DefenderFacts) -> Vec<Finding> {
                 )
                 .evidence(vec![WMI_CLASS.to_string(), "BehaviorMonitorEnabled: false".to_string()])
                 .remediation(
-                    "Re-enable real-time protection, which includes behaviour monitoring.",
-                    FixRisk::Safe,
+                    "Re-enable real-time protection, which includes behaviour monitoring."
                 )
+                .help(HelpTarget::VirusProtectionSettings)
                 .source(SOURCE)
                 .build(),
         );

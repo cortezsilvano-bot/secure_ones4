@@ -6,7 +6,7 @@
 //! and flattening the two would either cry wolf or miss the fire.
 
 use crate::collectors::firewall::{FirewallFacts, FirewallProfile};
-use crate::findings::{Finding, FindingBuilder, FixRisk, Severity};
+use crate::findings::{Finding, FindingBuilder, HelpTarget, Severity};
 
 const SOURCE: &str = "windows.firewall";
 const CATEGORY: &str = "Firewall";
@@ -63,9 +63,9 @@ fn evaluate_profile(p: &FirewallProfile) -> Vec<Finding> {
                 "FirewallEnabled: false".to_string(),
             ])
             .remediation(
-                &format!("Turn the firewall back on for the {name} profile in Windows Security, under Firewall & network protection."),
-                FixRisk::Safe,
+                &format!("Turn the firewall back on for the {name} profile in Windows Security, under Firewall & network protection.")
             )
+            .help(HelpTarget::FirewallAndNetwork)
             .source(SOURCE)
             .build(),
         );
@@ -96,9 +96,9 @@ fn evaluate_profile(p: &FirewallProfile) -> Vec<Finding> {
                 "DefaultInboundAction: Allow".to_string(),
             ])
             .remediation(
-                &format!("Set the {name} profile's inbound default back to Block in Windows Defender Firewall advanced settings."),
-                FixRisk::Safe,
+                &format!("Set the {name} profile's inbound default back to Block in Windows Defender Firewall advanced settings.")
             )
+            .help(HelpTarget::FirewallAndNetwork)
             .source(SOURCE)
             .build(),
         );
@@ -128,9 +128,9 @@ fn evaluate_profile(p: &FirewallProfile) -> Vec<Finding> {
                 "NotificationsDisabled: true".to_string(),
             ])
             .remediation(
-                "Re-enable firewall notifications in Windows Security, under Firewall & network protection.",
-                FixRisk::Safe,
+                "Re-enable firewall notifications in Windows Security, under Firewall & network protection."
             )
+            .help(HelpTarget::FirewallAndNetwork)
             .source(SOURCE)
             .build(),
         );

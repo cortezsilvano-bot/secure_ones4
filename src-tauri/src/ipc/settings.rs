@@ -191,6 +191,8 @@ pub fn delete_everything(state: State<'_, AppState>) -> Result<DeletionSummary, 
 }
 
 fn clear(state: &AppState, tables: &[&str]) -> Result<DeletionSummary, String> {
+    // Drop the in-memory router snapshot too, and prevent pending old scans from committing it again.
+    state.router.cancel(state.router.generation());
     state
         .db
         .with(|c| {

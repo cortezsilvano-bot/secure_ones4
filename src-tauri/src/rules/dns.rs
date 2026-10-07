@@ -14,7 +14,7 @@
 use std::net::Ipv4Addr;
 
 use crate::collectors::network::interfaces::{InterfaceFacts, NetworkInterface};
-use crate::findings::{Confidence, Finding, FindingBuilder, FixRisk, Severity};
+use crate::findings::{Confidence, Finding, FindingBuilder, HelpTarget, Severity};
 
 const SOURCE: &str = "network.dns";
 const CATEGORY: &str = "Network";
@@ -136,9 +136,9 @@ fn evaluate_interface(iface: &NetworkInterface) -> Vec<Finding> {
         .asset(&iface.friendly_name)
         .evidence(evidence)
         .remediation(
-            "If you did not set this DNS server yourself, check your router's settings and this PC's network adapter settings.",
-            FixRisk::Manual,
+            "If you did not set this DNS server yourself, check your router's settings and this PC's network adapter settings."
         )
+        .help(HelpTarget::NetworkStatus)
         .source(SOURCE)
         .build(),
     );

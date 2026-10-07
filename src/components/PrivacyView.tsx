@@ -101,8 +101,14 @@ export function PrivacyView() {
             <h2 className="text-slate-200 font-medium">What leaves this PC</h2>
           </div>
           <p className="text-slate-500 text-xs mb-4">
-            These are the only addresses SENTRY ever contacts, and only when you ask it to
-            download vulnerability data. Scans themselves make no network requests at all.
+            Windows checks read data on this PC. Standard and background scans read cached
+            router results. Active router scans require separate confirmation and send discovery messages,
+            HTTP/UPnP queries and TCP probes to inspect the gateway. Optional device
+            discovery and port scans also communicate with devices on your network.
+            The separately confirmed ASUS settings scan sends one login over verified HTTPS,
+            reads selected settings and attempts logout. Credentials and session tokens are not stored.
+            SENTRY does not test public Internet reachability.
+            The public data feeds below are contacted when you request a data refresh.
           </p>
           <div className="space-y-4">
             {report.endpoints.map((endpoint) => (

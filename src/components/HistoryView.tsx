@@ -4,6 +4,7 @@ import { Info, Loader2 } from 'lucide-react';
 import { getScanHistory } from '../services/ipc';
 import type { ScanRecord } from '../types';
 import { formatTimestamp } from '../types';
+import { RouterHistory } from './RouterHistory';
 
 /**
  * The single series colour, validated against this app's surface (#020617) for
@@ -59,6 +60,7 @@ export function HistoryView() {
         {scored.length > 0 && <ScoreChart records={scored} />}
 
         {records.length > 0 && <ScanTable records={records} />}
+        <RouterHistory />
       </div>
     </div>
   );

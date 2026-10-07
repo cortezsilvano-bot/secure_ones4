@@ -14,10 +14,13 @@ import type {
   FeedStatus,
   FixAction,
   FixResult,
+  HelpTarget,
   Known,
   PrivacyReport,
   RefreshSummary,
-  RouterFacts,
+  RouterReport,
+  SavedRouterReport,
+  RouterEnvironment,
   ScanRecord,
   SettingsView,
   SweepSummary,
@@ -87,7 +90,7 @@ export async function getFeedStatus(): Promise<FeedStatus[]> {
 /**
  * Download the latest vulnerability data.
  *
- * The only user-facing action that reaches the internet. Slow by design: NVD
+ * Refreshes public security data over the internet. Slow by design: NVD
  * permits one request every six seconds, so this takes minutes on a machine
  * with a lot installed. Progress arrives as `vuln-refresh-progress` events.
  */
@@ -115,8 +118,7 @@ export function getDevices(): Promise<Known<DeviceList>> {
 /**
  * Actively sweep the local network.
  *
- * The one action that puts traffic on the user's network, so it is always
- * explicit. ARP requests stay on the local subnet and never reach the internet.
+ * An explicit active LAN sweep. Router inspection also generates local traffic.
  */
 export async function discoverDevices(): Promise<SweepSummary> {
   if (!hasBackend()) throw new Error(NO_BACKEND);
@@ -145,8 +147,52 @@ export async function renameDevice(deviceId: string, name: string): Promise<void
 // --- Router -----------------------------------------------------------------
 
 /** What SENTRY established about the router, and what it could not. */
-export function getRouterStatus(): Promise<Known<RouterFacts>> {
-  return callKnown<RouterFacts>('get_router_status');
+export function getRouterStatus(generation: number): Promise<Known<RouterReport>> {
+  return callKnown<RouterReport>('get_router_status', { generation });
+}
+
+export async function getRouterHistory(): Promise<SavedRouterReport[]> {
+  if (!hasBackend()) throw new Error(NO_BACKEND);
+  return invoke<SavedRouterReport[]>('get_router_history', { limit: 20 });
+}
+
+/** Only call after the user confirms active checks for this exact generation. */
+export function scanRouter(generation: number): Promise<Known<RouterReport>> {
+  return callKnown<RouterReport>('scan_router', { generation, confirmed: true });
+}
+
+export interface AsusLoginOptions {
+  username: string;
+  password: string;
+  httpsPort: number;
+  certificatePem: string;
+  supportRegion: 'unknown' | 'eu' | 'other';
+}
+
+/** One explicit login; never persist these arguments or reuse them for refresh. */
+export async function scanAsusRouter(generation: number, options: AsusLoginOptions): Promise<Known<RouterReport>> {
+  if (!hasBackend()) return { state: 'unavailable', data: NO_BACKEND };
+  try {
+    return await invoke<Known<RouterReport>>('scan_asus_router', { generation, confirmed: true, options });
+  } catch {
+    // Do not display an IPC exception that might contain rejected secret arguments.
+    return { state: 'unavailable', data: 'The ASUS scan command could not complete. Credentials were not saved.' };
+  }
+}
+
+export async function getRouterEnvironment(): Promise<RouterEnvironment> {
+  if (!hasBackend()) throw new Error(NO_BACKEND);
+  return invoke<RouterEnvironment>('get_router_environment');
+}
+
+export async function selectRouter(targetId: string, generation: number): Promise<RouterEnvironment> {
+  if (!hasBackend()) throw new Error(NO_BACKEND);
+  return invoke<RouterEnvironment>('select_router', { targetId, generation });
+}
+
+export async function cancelRouterScan(generation: number): Promise<void> {
+  if (!hasBackend()) return;
+  await invoke('cancel_router_scan', { generation });
 }
 
 // --- Timeline, history and privacy ------------------------------------------
@@ -214,4 +260,16 @@ export async function deleteEverything(): Promise<DeletionSummary> {
 export async function applyFix(action: FixAction, findingId?: string): Promise<FixResult> {
   if (!hasBackend()) throw new Error(NO_BACKEND);
   return invoke<FixResult>('apply_fix', { action, findingId, confirmed: true });
+}
+
+/**
+ * Open the Windows page where a manual recommendation is carried out.
+ *
+ * Changes nothing. `target` is a value from a fixed set, and the backend turns
+ * it into a constant; the page opened is never built from a string that came
+ * from here.
+ */
+export async function openHelpTarget(target: HelpTarget): Promise<void> {
+  if (!hasBackend()) throw new Error(NO_BACKEND);
+  await invoke('open_help_target', { target });
 }

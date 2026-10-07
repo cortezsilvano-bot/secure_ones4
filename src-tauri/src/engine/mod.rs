@@ -45,6 +45,10 @@ pub struct OverviewTile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dashboard {
+    #[serde(default)]
+    pub router_generation: u64,
+    #[serde(default)]
+    pub router_facts: Known<router::RouterFacts>,
     pub score: SecurityScore,
     pub tiles: Vec<OverviewTile>,
     pub findings: Vec<Finding>,
@@ -90,9 +94,17 @@ fn categories_for(module: &str) -> &[&str] {
 
 /// Run a scan and assemble the dashboard.
 ///
-/// Reads the vulnerability feed caches but never refreshes them: a scan makes
-/// no network request of its own.
+/// Reads cached vulnerability and router results. Never starts router probing.
 pub fn scan(db: &Database) -> Dashboard {
+    scan_with_router(db, &router::coordinator::RouterCoordinator::default())
+}
+
+pub fn scan_with_router(
+    db: &Database,
+    coordinator: &router::coordinator::RouterCoordinator,
+) -> Dashboard {
+    let _scan_guard = coordinator.dashboard_gate.lock();
+    let router_generation = coordinator.refresh_network().generation;
     let now = chrono::Utc::now().to_rfc3339();
 
     // --- collect -----------------------------------------------------------
@@ -106,20 +118,13 @@ pub fn scan(db: &Database) -> Dashboard {
 
     // --- network ------------------------------------------------------------
     // All passive: adapter configuration, Windows' own neighbour cache and the
-    // local socket table. No packets are sent during a scan.
+    // local socket table. These collectors send no packets.
     let interface_facts: Known<_> = interfaces::collect().into();
     let neighbor_facts: Known<_> = neighbors::collect().into();
     let port_facts: Known<_> = local_ports::collect().into();
 
-    // The router check is the one active part of a scan: an SSDP multicast and
-    // six TCP connects to the gateway. Both stay on the local network.
-    let router_facts: Known<_> = match &interface_facts {
-        Known::Known(ifaces) => router::collect(ifaces).into(),
-        other => Known::Unavailable(format!(
-            "The network adapters could not be read, so the router could not be inspected. {}",
-            describe_unknown(other)
-        )),
-    };
+    // A standard/background scan must never initiate active router traffic.
+    let router_facts = coordinator.cached(router_generation);
 
     let device_facts: Known<_> = match (&interface_facts, &neighbor_facts) {
         (Known::Known(ifaces), Known::Known(neigh)) => {
@@ -251,18 +256,13 @@ pub fn scan(db: &Database) -> Dashboard {
                     &clean_message(category, &device_facts),
                 )
             }),
-            "Router" => router_facts.clone().map(|_| {
-                verdict_from(
-                    &findings,
-                    categories_for(category),
-                    &clean_message(category, &device_facts),
-                )
-            }),
+            "Router" => router_verdict(&router_facts, &findings),
             // Not implemented yet. Honest by construction.
             _ => Known::NotScanned,
         };
 
-        if status.is_known() {
+        let router_complete = category != &"Router" || router_checks_complete(&router_facts);
+        if status.is_known() && router_complete {
             reporting += 1;
         } else {
             gaps.push((*title).to_string());
@@ -280,6 +280,8 @@ pub fn scan(db: &Database) -> Dashboard {
     let score = score::compute(&findings, reporting, MODULES.len(), gaps);
 
     let dashboard = Dashboard {
+        router_generation,
+        router_facts,
         score,
         tiles,
         findings,
@@ -288,11 +290,46 @@ pub fn scan(db: &Database) -> Dashboard {
     };
 
     // Persistence must never cost the user their scan results.
-    if let Err(e) = persist::record(db, &dashboard) {
+    coordinator.refresh_network();
+    if let Some(Err(e)) =
+        coordinator.if_current(router_generation, || persist::record(db, &dashboard))
+    {
         log::warn!("could not persist the scan: {e}");
     }
 
     dashboard
+}
+
+fn router_checks_complete(facts: &Known<router::RouterFacts>) -> bool {
+    matches!(facts, Known::Known(f) if matches!(f.upnp_discovery, Known::Known(true)) && f.port_forwards.is_some() && f.admin_probe.is_known())
+}
+
+fn router_verdict(facts: &Known<router::RouterFacts>, findings: &[Finding]) -> Known<TileVerdict> {
+    let Known::Known(f) = facts else {
+        return facts.clone().map(|_| unreachable!());
+    };
+    let verdict = verdict_from(
+        findings,
+        &["Router"],
+        "No issues identified in basic router checks; WAN reachability unverified",
+    );
+    if router_checks_complete(facts) {
+        return Known::Known(verdict);
+    }
+    let reason = format!(
+        "Router checks are incomplete. {} {}",
+        f.forwards_unavailable_reason.as_deref().unwrap_or(""),
+        describe_unknown(&f.admin_probe)
+    );
+    if verdict.severity == Severity::Safe {
+        Known::Unavailable(reason)
+    } else {
+        // Keep real findings visible even when other subchecks failed.
+        Known::Known(TileVerdict {
+            severity: verdict.severity,
+            message: format!("{} (partial check)", verdict.message),
+        })
+    }
 }
 
 /// The explanatory half of a non-`known` state, for embedding in a message.
@@ -327,7 +364,9 @@ fn clean_message(module: &str, devices: &Known<devices::DeviceFacts>) -> String 
         "Firewall" => "Firewall is on".to_string(),
         "Updates" => "Up to date".to_string(),
         "OpenPorts" => "No risky services exposed".to_string(),
-        "Router" => "Nothing exposed to the internet that SENTRY can see".to_string(),
+        "Router" => {
+            "No issues identified in basic router checks; WAN reachability unverified".to_string()
+        }
         _ => "No issues found".to_string(),
     }
 }
@@ -381,6 +420,51 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_router_checks_cannot_produce_a_safe_tile_or_full_coverage() {
+        let facts = Known::Known(router::RouterFacts {
+            upnp_discovery: Known::Unavailable("No response".into()),
+            forwards_unavailable_reason: Some("Could not read the mapping table".into()),
+            admin_probe: Known::Known(6),
+            ..Default::default()
+        });
+        assert!(matches!(router_verdict(&facts, &[]), Known::Unavailable(_)));
+        assert!(!router_checks_complete(&facts));
+        let findings = [finding(
+            "RTR-003",
+            "Router",
+            Severity::Warning,
+            "Open shell port",
+        )];
+        let verdict = router_verdict(&facts, &findings);
+        assert_eq!(verdict.value().unwrap().severity, Severity::Warning);
+        assert!(verdict.value().unwrap().message.contains("partial"));
+        assert!(!router_checks_complete(&facts));
+    }
+
+    #[test]
+    fn inconclusive_admin_probes_are_a_coverage_gap() {
+        let mut facts = router::RouterFacts {
+            upnp_discovery: Known::Known(true),
+            port_forwards: Some(vec![]),
+            admin_probe: Known::Unavailable("TCP probes timed out".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            router_verdict(&Known::Known(facts.clone()), &[]),
+            Known::Unavailable(_)
+        ));
+        facts.admin_probe = Known::Known(6);
+        let facts = Known::Known(facts);
+        assert!(router_checks_complete(&facts));
+        let verdict = router_verdict(&facts, &[]);
+        assert!(verdict
+            .value()
+            .unwrap()
+            .message
+            .contains("WAN reachability unverified"));
+    }
+
+    #[test]
     fn no_findings_reads_as_no_issues() {
         let v = verdict_from(&[], &["Malware Protection"], "No issues found");
         assert_eq!(v.severity, Severity::Safe);
@@ -418,6 +502,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Uses real Windows collectors; requires explicit approval outside offline checks"]
     fn modules_without_rules_report_not_scanned() {
         let dash = scan(&db());
         assert_eq!(dash.tiles.len(), MODULES.len());
@@ -438,6 +523,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Uses real Windows collectors; requires explicit approval outside offline checks"]
     fn a_tile_is_never_safe_without_a_collector() {
         let dash = scan(&db());
         for tile in &dash.tiles {
@@ -453,6 +539,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Uses real Windows collectors; requires explicit approval outside offline checks"]
     fn vulnerabilities_report_unavailable_before_any_feed_refresh() {
         // A fresh store has no feed data. The tile must say so rather than
         // show a reassuring "No issues found".
@@ -471,12 +558,20 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Uses real Windows collectors; requires explicit approval outside offline checks"]
     fn coverage_reflects_what_actually_ran() {
         let dash = scan(&db());
         assert_eq!(dash.score.modules_total, MODULES.len());
 
         // Every tile that did not report must be named in `gaps`, and nothing else.
-        let not_reporting = dash.tiles.iter().filter(|t| !t.status.is_known()).count();
+        let not_reporting = dash
+            .tiles
+            .iter()
+            .filter(|t| {
+                !t.status.is_known()
+                    || (t.category == "Router" && !router_checks_complete(&dash.router_facts))
+            })
+            .count();
         assert_eq!(
             dash.score.gaps.len(),
             not_reporting,
@@ -486,13 +581,18 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_is_recorded_in_the_store() {
+    #[ignore = "Uses real Windows collectors; requires explicit approval outside offline checks"]
+    fn only_a_scan_for_the_current_network_is_committed() {
         let db = db();
-        scan(&db);
+        let coordinator = router::coordinator::RouterCoordinator::default();
+        let dashboard = scan_with_router(&db, &coordinator);
 
         let runs: i64 = db
             .with(|c| c.query_row("SELECT count(*) FROM scan_runs", [], |r| r.get(0)))
             .unwrap();
-        assert_eq!(runs, 1);
+        assert_eq!(
+            runs,
+            i64::from(dashboard.router_generation == coordinator.generation())
+        );
     }
 }

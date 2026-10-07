@@ -82,7 +82,9 @@ pub fn record(db: &Database, dashboard: &Dashboard) -> rusqlite::Result<()> {
                  ON CONFLICT (id) DO UPDATE SET
                     severity = ?4, confidence = ?5, title = ?6, what_happened = ?7,
                     why_it_matters = ?8, remediation = ?10, evidence_json = ?13,
-                    references_json = ?14, last_seen = ?15",
+                    references_json = ?14, last_seen = ?15,
+                    status = CASE WHEN findings.category = 'Router' AND findings.status = 'resolved'
+                                  THEN 'open' ELSE findings.status END",
             )?;
 
             for f in &dashboard.findings {
@@ -102,8 +104,8 @@ pub fn record(db: &Database, dashboard: &Dashboard) -> rusqlite::Result<()> {
                     serde_json::to_string(&f.evidence).unwrap_or_else(|_| "[]".into()),
                     serde_json::to_string(&f.references).unwrap_or_else(|_| "[]".into()),
                     now,
-                    // The user's own status is never overwritten by a re-scan,
-                    // so this value only applies on first insert.
+                    // Dismissals survive rescans. A router finding that was
+                    // automatically resolved reopens when observed again.
                     "open",
                     f.source,
                 ])?;
@@ -120,14 +122,44 @@ pub fn record(db: &Database, dashboard: &Dashboard) -> rusqlite::Result<()> {
                 ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
             };
 
+            // Missing coverage or a different router is not evidence of resolution.
+            // Generic IGD/TCP coverage cannot resolve protocol-specific findings.
+            // RTR-005/006 await endpoint-specific recheck evidence.
+            let router_asset = if super::router_checks_complete(&dashboard.router_facts) {
+                dashboard.router_facts.value().and_then(|f| f.target.as_ref()).map(|t| t.asset())
+            } else { None };
             let sql = format!(
                 "UPDATE findings SET status = 'resolved'
-                 WHERE status = 'open' AND id NOT IN ({placeholders})"
+                 WHERE status = 'open' AND id NOT IN ({placeholders})
+                   AND (category != 'Router' OR
+                     (affected_asset = ? AND rule_id IN ('RTR-001', 'RTR-002', 'RTR-003', 'RTR-004')))"
             );
-            let refs: Vec<&dyn rusqlite::ToSql> =
+            let mut refs: Vec<&dyn rusqlite::ToSql> =
                 ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            refs.push(&router_asset);
             tx.execute(&sql, refs.as_slice())?;
+            // Settings findings need their own contrary evidence, not generic
+            // UPnP/TCP completeness. Only resolve the same router's absent finding.
+            if let Some(facts) = dashboard.router_facts.value() {
+                if let Some(target) = &facts.target {
+                    for rule in crate::rules::router_settings::resolved_rules(facts) {
+                        if !dashboard.findings.iter().any(|f| f.rule_id == rule) {
+                            tx.execute("UPDATE findings SET status = 'resolved' WHERE status = 'open' AND category = 'Router' AND affected_asset = ?1 AND rule_id = ?2",
+                                params![target.asset(), rule])?;
+                        }
+                    }
+                }
+            }
         }
+
+        // Keep evidence bound to this historical scan; never reload it as live state.
+        let router_json = serde_json::to_value(&dashboard.router_facts).unwrap_or_default();
+        tx.execute(
+            "INSERT INTO security_facts (scan_run_id, collector, fact_key, state, value_json, collected_at)
+             VALUES (?1, 'network.router', 'router_snapshot', ?2, ?3, ?4)",
+            params![scan_run_id, router_json["state"].as_str().unwrap_or("unavailable"),
+                serde_json::json!({"generation": dashboard.router_generation, "facts": router_json}).to_string(), now],
+        )?;
 
         // The score is part of the run's record, so history can show it moving.
         tx.execute(
@@ -167,6 +199,8 @@ mod tests {
 
     fn dashboard(findings: Vec<crate::findings::Finding>) -> Dashboard {
         Dashboard {
+            router_generation: 0,
+            router_facts: crate::security::Known::NotScanned,
             score: score::compute(&findings, 5, 9, vec!["Network".into()]),
             tiles: vec![],
             findings,
@@ -361,5 +395,183 @@ mod tests {
             })
             .unwrap();
         assert!(json.contains("coverage"));
+    }
+
+    #[test]
+    fn router_findings_require_complete_matching_target_evidence_to_resolve() {
+        use crate::{
+            collectors::network::router::{target, RouterFacts},
+            security::Known,
+        };
+        let db = Database::open_in_memory().unwrap();
+        let target = target::candidates(&target::fixture(), 1).remove(0);
+        let finding = FindingBuilder::new("RTR-001", "Router", Severity::Warning, "Mapping")
+            .what("An enabled mapping was observed")
+            .asset(&target.asset())
+            .evidence(["UPnP".into()])
+            .build();
+        let mut scan = dashboard(vec![finding]);
+        record(&db, &scan).unwrap();
+        scan.findings.clear();
+        record(&db, &scan).unwrap(); // no router check
+        let status = || {
+            db.with(|c| c.query_row("SELECT status FROM findings", [], |r| r.get::<_, String>(0)))
+                .unwrap()
+        };
+        assert_eq!(status(), "open");
+        let mut other = target.clone();
+        other.address = "192.168.1.2".parse().unwrap();
+        scan.router_facts = Known::Known(RouterFacts {
+            target: Some(other),
+            upnp_discovery: Known::Known(true),
+            port_forwards: Some(vec![]),
+            admin_probe: Known::Known(6),
+            ..Default::default()
+        });
+        record(&db, &scan).unwrap();
+        assert_eq!(status(), "open");
+        if let Known::Known(f) = &mut scan.router_facts {
+            f.target = Some(target);
+        }
+        record(&db, &scan).unwrap();
+        assert_eq!(status(), "resolved");
+        let snapshots: i64 = db
+            .with(|c| {
+                c.query_row(
+                    "SELECT count(*) FROM security_facts WHERE fact_key = 'router_snapshot'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(snapshots, 4, "historical snapshots survive target changes");
+    }
+
+    #[test]
+    fn observed_http_finding_and_snapshot_are_persisted_together() {
+        use crate::{
+            collectors::network::router::{probe, target, RouterFacts},
+            security::Known,
+        };
+        let db = Database::open_in_memory().unwrap();
+        let target = target::candidates(&target::fixture(), 1).remove(0);
+        let ctx = probe::ProbeContext::new(&target);
+        ctx.fixture_http_response("http://192.168.1.1:49000/root.xml")
+            .unwrap();
+        let facts = RouterFacts {
+            target: Some(target),
+            observed_services: ctx.observed_services(),
+            ..Default::default()
+        };
+        let mut scan = dashboard(crate::rules::router::evaluate(&facts));
+        scan.router_facts = Known::Known(facts);
+        record(&db, &scan).unwrap();
+        let (rule, snapshot): (String, String) = db.with(|c| c.query_row(
+            "SELECT rule_id, (SELECT value_json FROM security_facts WHERE fact_key = 'router_snapshot') FROM findings", [],
+            |row| Ok((row.get(0)?, row.get(1)?)))).unwrap();
+        assert_eq!(rule, "RTR-005");
+        let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+        assert_eq!(
+            snapshot["facts"]["data"]["observedServices"][0]["port"],
+            49000
+        );
+        assert_eq!(ctx.request_count(), 0);
+    }
+
+    #[test]
+    fn settings_findings_resolve_only_with_matching_contrary_evidence() {
+        use crate::{
+            collectors::network::router::{target, RouterFacts},
+            security::Known,
+        };
+        let db = Database::open_in_memory().unwrap();
+        let target = target::candidates(&target::fixture(), 1).remove(0);
+        let mut facts = RouterFacts {
+            target: Some(target.clone()),
+            ..Default::default()
+        };
+        facts.settings.wan_management_enabled = Known::Known(true);
+        let mut scan = dashboard(crate::rules::router::evaluate(&facts));
+        scan.router_facts = Known::Known(facts.clone());
+        record(&db, &scan).unwrap();
+        let status = || {
+            db.with(|c| {
+                c.query_row(
+                    "SELECT status FROM findings WHERE rule_id = 'RTR-007'",
+                    [],
+                    |r| r.get::<_, String>(0),
+                )
+            })
+            .unwrap()
+        };
+        scan.findings.clear();
+        facts.settings.wan_management_enabled = Known::NotScanned;
+        scan.router_facts = Known::Known(facts.clone());
+        record(&db, &scan).unwrap();
+        assert_eq!(status(), "open");
+        facts.settings.wan_management_enabled = Known::Known(false);
+        facts.target.as_mut().unwrap().address = "192.168.1.2".parse().unwrap();
+        scan.router_facts = Known::Known(facts.clone());
+        record(&db, &scan).unwrap();
+        assert_eq!(status(), "open");
+        facts.target = Some(target);
+        scan.router_facts = Known::Known(facts.clone());
+        record(&db, &scan).unwrap();
+        assert_eq!(status(), "resolved");
+        facts.settings.wan_management_enabled = Known::Known(true);
+        scan.findings = crate::rules::router::evaluate(&facts);
+        scan.router_facts = Known::Known(facts);
+        record(&db, &scan).unwrap();
+        assert_eq!(status(), "open");
+        db.with(|c| {
+            c.execute(
+                "UPDATE findings SET status = 'dismissed' WHERE rule_id = 'RTR-007'",
+                [],
+            )
+        })
+        .unwrap();
+        record(&db, &scan).unwrap();
+        assert_eq!(status(), "dismissed");
+    }
+
+    #[test]
+    fn generic_router_scan_cannot_resolve_protocol_findings() {
+        use crate::{
+            collectors::network::router::{target, RouterFacts},
+            security::Known,
+        };
+        let db = Database::open_in_memory().unwrap();
+        let target = target::candidates(&target::fixture(), 1).remove(0);
+        let findings = ["RTR-005", "RTR-006"]
+            .into_iter()
+            .map(|rule| {
+                FindingBuilder::new(rule, "Router", Severity::Warning, "Protocol observation")
+                    .what("A protocol response was observed in a synthetic fixture")
+                    .asset(&target.asset())
+                    .evidence(["Synthetic protocol evidence".into()])
+                    .build()
+            })
+            .collect();
+        let mut scan = dashboard(findings);
+        record(&db, &scan).unwrap();
+        scan.findings.clear();
+        scan.router_facts = Known::Known(RouterFacts {
+            target: Some(target),
+            upnp_discovery: Known::Known(true),
+            port_forwards: Some(vec![]),
+            admin_probe: Known::Known(6),
+            ..Default::default()
+        });
+        record(&db, &scan).unwrap();
+        let open: i64 = db
+            .with(|c| {
+                c.query_row(
+                    "SELECT count(*) FROM findings WHERE status = 'open'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(open, 2);
     }
 }

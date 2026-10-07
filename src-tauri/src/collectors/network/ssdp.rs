@@ -3,11 +3,9 @@
 //! This is how SENTRY learns about the router as a *device* rather than just an
 //! address, and -- far more importantly -- how it finds **port forwards**.
 //!
-//! A UPnP port mapping is a hole punched from the internet through to a machine
-//! on the home network, usually created automatically by a game, a console or a
-//! media server without anyone being told. It is one of the very few things
-//! visible from inside a home network that genuinely indicates outside exposure.
-//! Most home users have no idea these exist or how to look at them.
+//! A UPnP mapping configures forwarding to a machine on the home network.
+//! It does not establish public Internet reachability: upstream filtering and
+//! NAT can prevent access. The table may omit other forwarding mechanisms.
 //!
 //! Everything here is a request to the local router only. Nothing is sent to
 //! the internet.
@@ -17,7 +15,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::security::CollectorError;
+use super::router::probe::ProbeContext;
+use crate::security::{CollectorError, Known};
 
 /// The SSDP multicast group and port.
 const SSDP_ADDR: &str = "239.255.255.250:1900";
@@ -30,10 +29,6 @@ const LISTEN_FOR: Duration = Duration::from_secs(4);
 /// the politeness mechanism built into SSDP.
 const MX_SECONDS: u8 = 2;
 
-/// Cap on a device description document. Routers return a few kilobytes;
-/// anything far larger is malformed or hostile.
-const MAX_DESCRIPTION_BYTES: u64 = 256 * 1024;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SsdpResponder {
@@ -43,7 +38,7 @@ pub struct SsdpResponder {
     pub location: Option<String>,
     /// Advertised device or service type.
     pub service_type: Option<String>,
-    /// The `SERVER` header, which usually names the firmware.
+    /// The advertised software stack; not a verified installed firmware version.
     pub server: Option<String>,
 }
 
@@ -67,8 +62,11 @@ pub struct SsdpFacts {
     pub router_manufacturer: Option<String>,
     pub router_model: Option<String>,
     pub router_firmware: Option<String>,
-    /// True when the router answered SSDP at all, i.e. UPnP is switched on.
-    pub upnp_enabled: bool,
+    #[serde(default)]
+    pub server_banner: Option<String>,
+    /// A reply from the selected gateway. Silence does not establish disabled UPnP.
+    #[serde(default)]
+    pub upnp_discovery: Known<bool>,
     /// Port forwards read from the gateway. `None` means the list could not be
     /// read -- which is not the same as there being none.
     pub port_mappings: Option<Vec<PortMapping>>,
@@ -79,8 +77,7 @@ pub struct SsdpFacts {
 }
 
 impl SsdpFacts {
-    /// Mappings that are switched on, which are the ones that actually expose
-    /// something.
+    /// Mappings reported as enabled; public reachability is not established.
     pub fn active_mappings(&self) -> Vec<&PortMapping> {
         self.port_mappings
             .as_ref()
@@ -91,6 +88,18 @@ impl SsdpFacts {
 
 /// Discover UPnP devices and read the gateway's port mappings.
 pub fn collect(gateway: Option<&str>) -> Result<SsdpFacts, CollectorError> {
+    let interfaces = super::interfaces::collect()?;
+    let target = super::router::target::candidates(&interfaces, 1)
+        .into_iter()
+        .find(|t| gateway.is_some_and(|g| g == t.address.to_string()))
+        .ok_or_else(|| {
+            CollectorError::Unavailable("No supported local gateway selected.".into())
+        })?;
+    collect_target(&ProbeContext::new(&target))
+}
+
+pub(crate) fn collect_target(ctx: &ProbeContext) -> Result<SsdpFacts, CollectorError> {
+    let gateway = ctx.address.to_string();
     let mut facts = SsdpFacts {
         collected_at: chrono::Utc::now().to_rfc3339(),
         evidence: vec![
@@ -100,48 +109,20 @@ pub fn collect(gateway: Option<&str>) -> Result<SsdpFacts, CollectorError> {
         ..Default::default()
     };
 
-    facts.responders = discover()?;
-    facts.upnp_enabled = !facts.responders.is_empty();
+    facts.responders = discover(ctx)?;
 
     facts.evidence.push(format!(
         "{} device(s) answered UPnP discovery",
         facts.responders.len()
     ));
 
-    if !facts.upnp_enabled {
-        facts.mappings_unavailable_reason = Some(
-            "Nothing on the network answered UPnP discovery, so port forwards could not be read. \
-             This often means UPnP is turned off on the router, which is the safer setting."
-                .to_string(),
-        );
-        return Ok(facts);
-    }
-
-    // Prefer a responder that is the gateway; a media server answering SSDP is
-    // not the router.
-    let gateway_responder = facts
-        .responders
-        .iter()
-        .find(|r| gateway.is_some_and(|g| r.address.starts_with(g)))
-        .or_else(|| {
-            facts.responders.iter().find(|r| {
-                r.service_type
-                    .as_deref()
-                    .is_some_and(|t| t.contains("InternetGatewayDevice"))
-            })
-        })
-        .cloned();
-
-    let Some(responder) = gateway_responder else {
-        facts.mappings_unavailable_reason = Some(
-            "No device identified itself as the internet gateway, so port forwards could not be read."
-                .to_string(),
-        );
+    // Never attribute another device's reply to the selected gateway.
+    let Some(responder) = record_gateway_discovery(&mut facts, Some(&gateway)) else {
         return Ok(facts);
     };
 
     if let Some(server) = &responder.server {
-        facts.router_firmware = Some(server.clone());
+        facts.server_banner = Some(server.clone());
         facts.evidence.push(format!("Router reports: {server}"));
     }
 
@@ -155,7 +136,7 @@ pub fn collect(gateway: Option<&str>) -> Result<SsdpFacts, CollectorError> {
         .evidence
         .push(format!("Device description: {location}"));
 
-    match fetch_description(location) {
+    match fetch_description(ctx, location) {
         Ok(description) => {
             facts.router_manufacturer = extract_tag(&description, "manufacturer");
             facts.router_model = extract_tag(&description, "modelName")
@@ -170,10 +151,10 @@ pub fn collect(gateway: Option<&str>) -> Result<SsdpFacts, CollectorError> {
 
             // Reading the mapping table needs the control URL from the
             // description, which varies by manufacturer.
-            match control_url(location, &description) {
-                Some(control) => {
+            match mapping_service(location, &description) {
+                Some((control, service)) => {
                     facts.evidence.push(format!("Control endpoint: {control}"));
-                    match read_mappings(&control) {
+                    match read_mappings(ctx, &control, &service) {
                         Ok(mappings) => {
                             facts
                                 .evidence
@@ -205,14 +186,51 @@ pub fn collect(gateway: Option<&str>) -> Result<SsdpFacts, CollectorError> {
     Ok(facts)
 }
 
+fn select_gateway<'a>(
+    responders: &'a [SsdpResponder],
+    gateway: Option<&str>,
+) -> Option<&'a SsdpResponder> {
+    let gateway = gateway?.parse::<std::net::IpAddr>().ok()?;
+    responders
+        .iter()
+        .find(|r| r.address.parse::<std::net::IpAddr>().ok() == Some(gateway))
+}
+
+fn record_gateway_discovery(facts: &mut SsdpFacts, gateway: Option<&str>) -> Option<SsdpResponder> {
+    let responder = select_gateway(&facts.responders, gateway).cloned();
+    if responder.is_some() {
+        facts.upnp_discovery = Known::Known(true);
+    } else {
+        let reason = "The selected gateway did not answer discovery. UPnP may be disabled, filtered or unavailable; its configuration is unknown.";
+        facts.upnp_discovery = Known::Unavailable(reason.into());
+        facts.mappings_unavailable_reason = Some(reason.into());
+    }
+    responder
+}
+
 /// Send an SSDP M-SEARCH and collect the replies.
-fn discover() -> Result<Vec<SsdpResponder>, CollectorError> {
-    let socket = UdpSocket::bind("0.0.0.0:0")
+fn discover(ctx: &ProbeContext) -> Result<Vec<SsdpResponder>, CollectorError> {
+    if cfg!(test) {
+        return Err(CollectorError::Unsupported(
+            "SSDP multicast is disabled in unit-test builds.".into(),
+        ));
+    }
+    ctx.reserve()?;
+    let socket = UdpSocket::bind((ctx.local_address, 0))
         .map_err(|e| CollectorError::Unavailable(format!("Could not open a UDP socket: {e}")))?;
 
     socket
         .set_read_timeout(Some(Duration::from_millis(500)))
         .map_err(|e| CollectorError::Unavailable(format!("Could not configure the socket: {e}")))?;
+
+    socket.set_multicast_ttl_v4(1).map_err(|e| {
+        CollectorError::Unavailable(format!("Could not restrict discovery scope: {e}"))
+    })?;
+    socket2::SockRef::from(&socket)
+        .set_multicast_if_v4(&ctx.local_address)
+        .map_err(|e| {
+            CollectorError::Unavailable(format!("Could not select discovery interface: {e}"))
+        })?;
 
     let request = format!(
         "M-SEARCH * HTTP/1.1\r\n\
@@ -231,8 +249,15 @@ fn discover() -> Result<Vec<SsdpResponder>, CollectorError> {
     let mut buffer = [0u8; 2048];
 
     while std::time::Instant::now() < deadline {
+        ctx.check()?;
+        socket
+            .set_read_timeout(Some(ctx.remaining()?.min(Duration::from_millis(250))))
+            .map_err(|e| CollectorError::Unavailable(e.to_string()))?;
         match socket.recv_from(&mut buffer) {
             Ok((len, from)) => {
+                if from.ip() != std::net::IpAddr::V4(ctx.address) || responders.len() >= 64 {
+                    continue;
+                }
                 let text = String::from_utf8_lossy(&buffer[..len]);
                 let responder = SsdpResponder {
                     address: from.ip().to_string(),
@@ -249,8 +274,21 @@ fn discover() -> Result<Vec<SsdpResponder>, CollectorError> {
                     responders.push(responder);
                 }
             }
-            // A timeout just means nothing arrived in this window.
-            Err(_) => continue,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue
+            }
+            Err(e) => {
+                return Err(CollectorError::Unavailable(format!(
+                    "Discovery receive failed: {e}"
+                )))
+            }
         }
     }
 
@@ -266,20 +304,14 @@ fn header(response: &str, name: &str) -> Option<String> {
     })
 }
 
-fn fetch_description(url: &str) -> Result<String, CollectorError> {
-    let mut response = ureq::get(url)
-        .call()
-        .map_err(|e| CollectorError::Unavailable(format!("{e}")))?;
-
-    response
-        .body_mut()
-        .with_config()
-        .limit(MAX_DESCRIPTION_BYTES)
-        .read_to_string()
-        .map_err(|e| CollectorError::Malformed {
-            origin: "UPnP device description".to_string(),
-            detail: e.to_string(),
-        })
+fn fetch_description(ctx: &ProbeContext, url: &str) -> Result<String, CollectorError> {
+    let (status, body) = ctx.http(url, None)?;
+    if status != 200 {
+        return Err(CollectorError::Unavailable(format!(
+            "Device description returned HTTP {status}."
+        )));
+    }
+    Ok(body)
 }
 
 /// Pull the text of the first `<tag>` in an XML document.
@@ -300,21 +332,28 @@ pub fn extract_tag(xml: &str, tag: &str) -> Option<String> {
 
 /// Build the absolute control URL for the port-mapping service.
 pub fn control_url(location: &str, description: &str) -> Option<String> {
-    // Both the older WANIPConnection and the WANPPPConnection services expose
-    // the mapping table; routers implement one or the other.
-    let control = ["WANIPConnection", "WANPPPConnection"]
-        .iter()
-        .find_map(|service| control_for_service(description, service))?;
-
-    resolve_url(location, &control)
+    mapping_service(location, description).map(|(url, _)| url)
 }
 
-fn control_for_service(description: &str, service: &str) -> Option<String> {
-    // Find the service block, then its controlURL.
-    let marker = description.find(service)?;
-    let rest = &description[marker..];
-    let end = rest.find("</service>").unwrap_or(rest.len());
-    extract_tag(&rest[..end], "controlURL")
+fn mapping_service(location: &str, description: &str) -> Option<(String, String)> {
+    for block in description.split("<service>").skip(1) {
+        let end = block.find("</service>")?;
+        let block = &block[..end];
+        let Some(service) = extract_tag(block, "serviceType") else {
+            continue;
+        };
+        if !matches!(
+            service.as_str(),
+            "urn:schemas-upnp-org:service:WANIPConnection:1"
+                | "urn:schemas-upnp-org:service:WANIPConnection:2"
+                | "urn:schemas-upnp-org:service:WANPPPConnection:1"
+        ) {
+            continue;
+        }
+        let control = extract_tag(block, "controlURL")?;
+        return Some((resolve_url(location, &control)?, service));
+    }
+    None
 }
 
 /// Resolve a possibly-relative URL against the description's location.
@@ -342,80 +381,232 @@ pub fn resolve_url(base: &str, path: &str) -> Option<String> {
 ///
 /// UPnP has no "list all" call; entries are read by index until the router
 /// reports there is no such entry.
-fn read_mappings(control: &str) -> Result<Vec<PortMapping>, CollectorError> {
+fn read_mappings(
+    ctx: &ProbeContext,
+    control: &str,
+    service: &str,
+) -> Result<Vec<PortMapping>, CollectorError> {
     const MAX_ENTRIES: u32 = 200;
 
     let mut mappings = Vec::new();
-
     for index in 0..MAX_ENTRIES {
         let body = format!(
             r#"<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
  <s:Body>
-  <u:GetGenericPortMappingEntry xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">
+  <u:GetGenericPortMappingEntry xmlns:u="{service}">
    <NewPortMappingIndex>{index}</NewPortMappingIndex>
   </u:GetGenericPortMappingEntry>
  </s:Body>
 </s:Envelope>"#
         );
 
-        let response = ureq::post(control)
-            .header("Content-Type", "text/xml; charset=\"utf-8\"")
-            .header(
-                "SOAPAction",
-                "\"urn:schemas-upnp-org:service:WANIPConnection:1#GetGenericPortMappingEntry\"",
-            )
-            .send(body);
+        let (status, text) = ctx.http(
+            control,
+            Some((&format!("\"{service}#GetGenericPortMappingEntry\""), &body)),
+        )?;
 
-        let Ok(mut response) = response else {
-            // The router refuses once the index runs past the end, which is how
-            // the walk terminates. An error on the very first entry means the
-            // table could not be read at all.
-            if index == 0 {
-                return Err(CollectorError::Unavailable(
-                    "The router refused the port-forward query.".into(),
-                ));
-            }
-            break;
-        };
-
-        let Ok(text) = response
-            .body_mut()
-            .with_config()
-            .limit(MAX_DESCRIPTION_BYTES)
-            .read_to_string()
-        else {
-            break;
-        };
-
-        // A SOAP fault also ends the walk.
-        if text.contains("SpecifiedArrayIndexInvalid") || text.contains("<s:Fault>") {
-            break;
+        match parse_mapping_response(status, &text)? {
+            Some(mapping) => mappings.push(mapping),
+            None => return Ok(mappings),
         }
-
-        let Some(external) = extract_tag(&text, "NewExternalPort").and_then(|v| v.parse().ok())
-        else {
-            break;
-        };
-
-        mappings.push(PortMapping {
-            external_port: external,
-            internal_port: extract_tag(&text, "NewInternalPort")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(external),
-            internal_client: extract_tag(&text, "NewInternalClient").unwrap_or_default(),
-            protocol: extract_tag(&text, "NewProtocol").unwrap_or_else(|| "TCP".to_string()),
-            description: extract_tag(&text, "NewPortMappingDescription").unwrap_or_default(),
-            enabled: extract_tag(&text, "NewEnabled").as_deref() != Some("0"),
-        });
     }
 
-    Ok(mappings)
+    Err(CollectorError::Unavailable(
+        "The port-forward enumeration limit was reached; the list is incomplete.".into(),
+    ))
+}
+
+/// Only the standardized end-of-table fault establishes a complete list.
+/// See https://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v1-Service.pdf, section 2.4.14.
+fn parse_mapping_response(status: u16, text: &str) -> Result<Option<PortMapping>, CollectorError> {
+    let malformed = || CollectorError::Malformed {
+        origin: "UPnP port mapping".into(),
+        detail: "Missing or invalid mapping fields; the list is incomplete.".into(),
+    };
+    if let Some(code) = extract_tag(text, "errorCode") {
+        if code == "713" && (status == 500 || status == 200) {
+            return Ok(None);
+        }
+        return Err(CollectorError::Unavailable(format!(
+            "The router returned UPnP error {code}; the mapping list is unavailable."
+        )));
+    }
+    if status != 200 {
+        return Err(CollectorError::Unavailable(format!(
+            "Port-forward query returned HTTP {status}."
+        )));
+    }
+    let port = |tag| {
+        extract_tag(text, tag)
+            .and_then(|v| v.parse::<u16>().ok())
+            .filter(|p| *p != 0)
+            .ok_or_else(malformed)
+    };
+    let protocol = extract_tag(text, "NewProtocol")
+        .ok_or_else(malformed)?
+        .to_ascii_uppercase();
+    if !matches!(protocol.as_str(), "TCP" | "UDP") {
+        return Err(malformed());
+    }
+    let enabled = match extract_tag(text, "NewEnabled").as_deref() {
+        Some("1" | "true") => true,
+        Some("0" | "false") => false,
+        _ => return Err(malformed()),
+    };
+    Ok(Some(PortMapping {
+        external_port: port("NewExternalPort")?,
+        internal_port: port("NewInternalPort")?,
+        internal_client: extract_tag(text, "NewInternalClient").ok_or_else(malformed)?,
+        protocol,
+        description: extract_tag(text, "NewPortMappingDescription").unwrap_or_default(),
+        enabled,
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_never_starts_ssdp_discovery() {
+        let ctx = super::super::router::probe::fixture(std::net::Ipv4Addr::LOCALHOST);
+        assert!(matches!(
+            discover(&ctx),
+            Err(CollectorError::Unsupported(_))
+        ));
+        assert_eq!(ctx.request_count(), 0);
+    }
+
+    const MAPPING: &str = "<NewExternalPort>4567</NewExternalPort><NewInternalPort>22</NewInternalPort><NewInternalClient>192.168.1.20</NewInternalClient><NewProtocol>TCP</NewProtocol><NewEnabled>1</NewEnabled>";
+
+    #[test]
+    fn silence_or_other_devices_never_establish_disabled_or_enabled_gateway_upnp() {
+        let mut facts = SsdpFacts::default();
+        assert!(record_gateway_discovery(&mut facts, Some("192.168.1.1")).is_none());
+        assert!(matches!(facts.upnp_discovery, Known::Unavailable(_)));
+        facts.responders.push(SsdpResponder {
+            address: "192.168.1.10".into(),
+            location: None,
+            service_type: Some("InternetGatewayDevice".into()),
+            server: None,
+        });
+        assert!(record_gateway_discovery(&mut facts, Some("192.168.1.1")).is_none());
+        assert!(matches!(facts.upnp_discovery, Known::Unavailable(_)));
+        facts.responders[0].address = "192.168.1.1".into();
+        assert!(record_gateway_discovery(&mut facts, Some("192.168.1.1")).is_some());
+        assert!(matches!(facts.upnp_discovery, Known::Known(true)));
+    }
+
+    #[test]
+    fn only_a_specific_end_of_table_fault_completes_enumeration() {
+        assert!(parse_mapping_response(500, "<errorCode>713</errorCode>")
+            .unwrap()
+            .is_none());
+        for (status, body) in [
+            (500, "<errorCode>501</errorCode>"),
+            (200, "<s:Fault/>"),
+            (401, ""),
+            (200, ""),
+            (302, ""),
+        ] {
+            assert!(parse_mapping_response(status, body).is_err());
+        }
+    }
+
+    #[test]
+    fn missing_mapping_fields_are_not_filled_with_security_assumptions() {
+        let m = parse_mapping_response(200, MAPPING).unwrap().unwrap();
+        assert_eq!((m.external_port, m.internal_port), (4567, 22));
+        assert!(m.enabled);
+        for tag in [
+            "NewInternalPort",
+            "NewProtocol",
+            "NewEnabled",
+            "NewInternalClient",
+        ] {
+            let value = extract_tag(MAPPING, tag).unwrap();
+            let incomplete = MAPPING.replace(&format!("<{tag}>{value}</{tag}>"), "");
+            assert!(
+                parse_mapping_response(200, &incomplete).is_err(),
+                "missing {tag}"
+            );
+        }
+        assert!(parse_mapping_response(
+            200,
+            &MAPPING.replace("<NewEnabled>1", "<NewEnabled>invalid")
+        )
+        .is_err());
+    }
+
+    fn mock_mapping_server(responses: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{BufRead, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/control", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let handle = std::thread::spawn(move || {
+            for (status, body) in responses {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10))
+                        }
+                        Err(e) => panic!("mock accept: {e}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                reader.read_exact(&mut vec![0; length]).unwrap();
+                write!(stream, "HTTP/1.1 {status} Response\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn http_fault_can_establish_an_empty_table() {
+        let (url, server) = mock_mapping_server(vec![(500, "<errorCode>713</errorCode>".into())]);
+        let result = read_mappings(
+            &super::super::router::probe::fixture(std::net::Ipv4Addr::LOCALHOST),
+            &url,
+            "urn:schemas-upnp-org:service:WANIPConnection:1",
+        );
+        server.join().unwrap();
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failed_second_query_cannot_turn_a_partial_table_into_a_complete_one() {
+        let (url, server) = mock_mapping_server(vec![
+            (200, MAPPING.into()),
+            (500, "<errorCode>501</errorCode>".into()),
+        ]);
+        let result = read_mappings(
+            &super::super::router::probe::fixture(std::net::Ipv4Addr::LOCALHOST),
+            &url,
+            "urn:schemas-upnp-org:service:WANIPConnection:1",
+        );
+        server.join().unwrap();
+        assert!(result.is_err());
+    }
 
     const DESCRIPTION: &str = r#"<?xml version="1.0"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0">
@@ -465,6 +656,22 @@ mod tests {
             url.as_deref(),
             Some("http://192.168.50.1:1990/upnp/control/WANIPConn1")
         );
+    }
+
+    #[test]
+    fn mapping_queries_use_the_advertised_supported_service() {
+        for service in [
+            "WANIPConnection:1",
+            "WANIPConnection:2",
+            "WANPPPConnection:1",
+        ] {
+            let description = DESCRIPTION.replace("WANIPConnection:1", service);
+            let (_, namespace) =
+                mapping_service("http://192.168.1.1/desc.xml", &description).unwrap();
+            assert_eq!(namespace, format!("urn:schemas-upnp-org:service:{service}"));
+        }
+        let unsupported = DESCRIPTION.replace("WANIPConnection:1", "UntrustedService:1");
+        assert!(mapping_service("http://192.168.1.1/desc.xml", &unsupported).is_none());
     }
 
     #[test]

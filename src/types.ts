@@ -68,7 +68,19 @@ export type Severity = 'Safe' | 'Attention' | 'Warning' | 'Critical';
 export type DisplaySeverity = Severity | 'Unknown';
 
 export type Confidence = 'confirmed' | 'likely' | 'potential';
-export type FixRisk = 'safe' | 'caution' | 'manual';
+export type FixRisk = 'safe' | 'caution';
+
+/** Mirrors `HelpTarget` in src-tauri/src/findings/mod.rs. */
+export type HelpTarget =
+  | 'virus_protection_settings'
+  | 'current_threats'
+  | 'protection_updates'
+  | 'firewall_and_network'
+  | 'windows_update'
+  | 'remote_desktop'
+  | 'windows_features'
+  | 'user_account_control'
+  | 'network_status';
 export type FindingStatus = 'open' | 'resolved' | 'dismissed' | 'allowlisted';
 
 /** Mirrors `Action` in src-tauri/src/findings/mod.rs. */
@@ -103,7 +115,13 @@ export interface Finding {
   /** The fix SENTRY can apply. Null means you have to do it yourself. */
   fixAction: FixAction | null;
   autoFix: boolean;
+  /** Set only alongside `fixAction`, because it describes that action. */
   autoFixRisk: FixRisk | null;
+  /**
+   * The Windows page where `remediation` is carried out by hand, when SENTRY
+   * will not do it. Null means there is no single page to send the user to.
+   */
+  helpTarget: HelpTarget | null;
   evidence: string[];
   references: string[];
   status: FindingStatus;
@@ -149,6 +167,8 @@ export interface OverviewTile {
 
 /** Mirrors `Dashboard` in src-tauri/src/engine/mod.rs. */
 export interface Dashboard {
+  routerGeneration: number;
+  routerFacts: Known<RouterFacts>;
   score: SecurityScore;
   tiles: OverviewTile[];
   findings: Finding[];
@@ -236,6 +256,23 @@ export interface SweepSummary {
 
 // --- Router -----------------------------------------------------------------
 
+export interface RouterTarget {
+  id: string;
+  address: string;
+  localAddress: string;
+  interfaceId: string;
+  interfaceName: string;
+  networkGeneration: number;
+  gatewayMac: string | null;
+}
+
+export interface RouterEnvironment {
+  generation: number;
+  candidates: RouterTarget[];
+  selectedId: string | null;
+  reason: string | null;
+}
+
 /** Mirrors `PortMapping` in src-tauri/src/collectors/network/ssdp.rs. */
 export interface PortMapping {
   externalPort: number;
@@ -248,28 +285,84 @@ export interface PortMapping {
 
 export interface AdminPort {
   port: number;
-  service: string | null;
-  /** True when the admin password would cross the network unencrypted. */
-  isPlaintext: boolean;
+  serviceHint: string | null;
+  protocol: Known<'http' | 'https' | 'ssh' | 'telnet'>;
+  encryption: Known<'encrypted' | 'plaintext'>;
 }
 
 /** Mirrors `RouterFacts` in src-tauri/src/collectors/network/router.rs. */
+export type WifiAuthentication = 'open' | 'wep' | 'wpa_personal' | 'wpa2_personal'
+  | 'wpa3_personal' | 'wpa2_wpa3_personal' | 'enterprise' | 'unrecognized';
+
+export interface RouterSettings {
+  wifiProfiles: Known<{
+    profileId: string;
+    enabled: Known<boolean>;
+    authentication: Known<WifiAuthentication>;
+    wpsEnabled: Known<boolean>;
+  }[]>;
+  wifiInventoryComplete: Known<boolean>;
+  wanManagementEnabled: Known<boolean>;
+  ipv4FirewallEnabled: Known<boolean>;
+  ipv6FirewallEnabled: Known<boolean>;
+}
+
 export interface RouterFacts {
+  firmwareAssessment?: {
+    advisoryMatches: Known<{ id: string; source: string }[]>;
+    catalogReviewedAt: string | null;
+    updateAvailable: Known<boolean>;
+    releaseEvidence?: string[];
+    advisoryReviews?: Known<{ id: string; disposition: 'fix_documented' | 'review_required' | 'affected_build'; detail: string; sources: string[] }[]>;
+    lifecycleEvidence?: string[];
+    supportRegion?: 'unknown' | 'eu' | 'other' | null;
+    catalogValidUntil?: string | null;
+    catalogScope?: string | null;
+    endOfSupport: Known<boolean>;
+  };
+  settings?: RouterSettings;
+  identity?: {
+    vendor: Known<string>;
+    reportedModel: Known<string>;
+    firmwareVersion: Known<string>;
+    authenticatedSettings: Known<boolean>;
+    evidence: string[];
+  } | null;
+  serverBanner?: string | null;
+  target: RouterTarget | null;
+  providerId: string | null;
+  requestsSent: number;
   gateway: string | null;
   manufacturer: string | null;
   model: string | null;
   firmware: string | null;
-  upnpEnabled: boolean;
+  upnpDiscovery: Known<boolean>;
   /** Null means the list could not be read -- not that there are none. */
   portForwards: PortMapping[] | null;
   forwardsUnavailableReason: string | null;
   adminPorts: AdminPort[];
+  /** Observed during existing requests; these may be UPnP service endpoints. */
+  observedServices?: AdminPort[];
+  adminProbe: Known<number>;
   /** Facts that would need the router's own password to establish. */
   requiresRouterLogin: string[];
   /** Facts that cannot be established from inside the network at all. */
   cannotDetermine: string[];
   evidence: string[];
   collectedAt: string;
+}
+
+/** Facts and findings from the same generation-bound router snapshot. */
+export interface RouterReport {
+  historyError?: string | null;
+  facts: RouterFacts;
+  findings: Finding[];
+}
+
+export interface SavedRouterReport {
+  id: number;
+  savedAt: string;
+  report: Known<RouterReport>;
 }
 
 // --- Timeline, history and privacy ------------------------------------------

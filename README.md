@@ -40,7 +40,7 @@ That sounds obvious and is surprisingly hard. Most of the design follows from it
 | Network | `GetAdaptersAddresses`, `GetIpNetTable2`, DNS resolver analysis |
 | Devices | Passive ARP cache plus an optional `SendARP` sweep, IEEE MAC vendor lookup |
 | Open ports | `GetExtendedTcpTable` — loopback and network-reachable kept distinct |
-| Router | SSDP/UPnP — make, model and port forwards from the internet |
+| Router | SSDP/UPnP — make, model and configured mappings; WAN reachability unverified |
 
 Deliberately **not** included: a bespoke antivirus engine. Defender already
 scans every file continuously with real signatures. SENTRY reports what Defender
@@ -48,9 +48,15 @@ found and whether it actually dealt with it, and can ask it to scan or update.
 
 ## Privacy
 
-A scan makes **no network requests at all** — it reads only data already on the
-machine. The only outbound traffic is an explicit, cancellable refresh of public
-vulnerability data:
+Windows checks read data on this PC. Standard scans and background scans only read
+cached router results; opening the router panel does not probe the network.
+Each active router scan requires separate confirmation. Confirmed router checks send SSDP discovery, HTTP/UPnP
+queries and TCP connection probes to inspect the gateway. Optional device discovery
+and port scans also communicate with devices on your network. Router checks do not
+sign in or test public Internet reachability.
+
+Public vulnerability and vendor data are downloaded through an explicit,
+cancellable refresh. These feed requests are separate from scanning:
 
 | Destination | What is sent |
 |---|---|
@@ -79,10 +85,16 @@ Requires Rust (1.82+), Node 20+, and the MSVC build tools.
 npm install
 npm run app          # run in development
 npm run app:build    # build installers
-cargo test           # from src-tauri/ — 396 tests
+cargo check --offline --locked --all-targets  # from src-tauri/; compile only
 ```
 
-Useful during development, from `src-tauri/`:
+The test suite includes real Windows collectors and socket fixtures. Do not run it
+wholesale on a live network. Use reviewed pure/in-memory test groups for offline work.
+Unit-test builds block LAN router requests and SSDP multicast; the engine tests that
+use real Windows collectors are ignored by default.
+
+The following examples include live network activity and require explicit approval
+before running them. They are not offline validation commands. From `src-tauri/`:
 
 ```bash
 cargo run --example probe            # every collector, against this machine
@@ -144,6 +156,13 @@ The IPC boundary has no generic `execute(command)`. Remediation is a fixed enum
 of named verbs; nothing a feed or a model produces ever becomes something that
 runs.
 
+Most findings are ones SENTRY will *not* change for you, and their advice ends
+"...in Windows Security, under Virus & threat protection settings" — three menus
+deep. `open_help_target` takes you there. It too is a fixed enum: the argument
+selects a `&'static str` by `match`, so the page opened is never assembled from
+a string that came from the webview, a finding or a feed. It opens a settings
+page and changes nothing.
+
 ## Known limits
 
 - **Background monitoring runs while the app runs.** Closing the window hides it
@@ -154,9 +173,20 @@ runs.
   the app reports that it could not check, rather than reporting none.
 - **Applying Defender policy fixes needs administrator rights.** SENTRY checks
   before attempting and explains, rather than failing with a hex code.
-- **Router internals need the router's password**, which SENTRY does not ask for.
-  Wi-Fi encryption, default admin passwords and firmware version are listed as
-  unavailable rather than guessed.
+- **ASUS settings scans require a separate, per-scan login confirmation.** The
+  experimental RT-AX82U / V2 provider covers GNUton `3004.388.9_2-gnuton1` in router
+  mode over verified HTTPS. It reads identity, firewall/WAN flags and enumerates
+  local wireless interfaces with before/after completeness checks. Credentials are
+  not saved; login is never retried automatically.
+  TLS checks remain enabled, including gateway IP identity. Default-password checks,
+  negotiated client encryption and AiMesh nodes are outside this scan. The reviewed
+  catalog distinguishes documented CVE fixes from applicability needing review,
+  and matches ASUS EOL evidence only to the selected support region. Unknowns stay explicit.
+  Source review and offline fixtures do not establish hardware compatibility.
+- **Router discovery currently supports unambiguous, private, on-subnet IPv4 gateways.**
+  Multiple candidates require selection. IPv6-only, public and overlapping gateway
+  routes are not supported yet. Router checks share a 20-second deadline and are
+  cancellable; partial checks remain explicit. See [router platform notes](docs/router-platform.md).
 - **Vulnerability matching is fuzzy at the edges.** Advisories that state no
   affected version range cannot be resolved either way and are reported as
   undetermined, not as vulnerabilities.

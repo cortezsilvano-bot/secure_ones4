@@ -2,7 +2,7 @@
 //!
 //! All three read the local store only. The privacy report in particular is
 //! meant to be checkable rather than reassuring: it counts what is actually on
-//! disk and names every address SENTRY has ever contacted, rather than
+//! disk and lists public data feed endpoints and their refresh times, rather than
 //! asserting that the application is private.
 
 use serde::{Deserialize, Serialize};
@@ -43,19 +43,20 @@ pub fn get_timeline(
             // Scans.
             {
                 let mut stmt = c.prepare(
-                    "SELECT started_at, status FROM scan_runs ORDER BY started_at DESC LIMIT ?1",
+                    "SELECT started_at, status, scan_type FROM scan_runs ORDER BY started_at DESC LIMIT ?1",
                 )?;
                 let rows = stmt.query_map([limit], |r| {
                     let status: String = r.get(1)?;
+                    let router_only = r.get::<_, String>(2)? == "router";
                     Ok(TimelineEntry {
                         occurred_at: r.get(0)?,
                         kind: "scan_completed".into(),
-                        title: "Scan finished".into(),
-                        detail: Some(match status.as_str() {
+                        title: if router_only { "Router scan finished".into() } else { "Scan finished".into() },
+                        detail: Some(if router_only { "Router observations saved; other areas were not scanned.".into() } else { match status.as_str() {
                             "complete" => "Every area was checked".to_string(),
                             "partial" => "Some areas could not be checked".to_string(),
                             other => format!("Status: {other}"),
-                        }),
+                        }}),
                         severity: None,
                     })
                 })?;
@@ -239,7 +240,7 @@ pub struct PrivacyReport {
     pub database_path: String,
     pub database_bytes: u64,
     pub stored: Vec<StoredData>,
-    /// Every address SENTRY can contact, and what it sends there.
+    /// Public data feed endpoints and what their requests contain.
     pub endpoints: Vec<OutboundEndpoint>,
     /// Things SENTRY does not do, stated so they can be checked.
     pub never_does: Vec<String>,
@@ -271,6 +272,8 @@ pub fn get_privacy_report(state: State<'_, AppState>) -> Result<PrivacyReport, S
                  "What was found, when, and whether you dismissed it."),
                 ("Scans run", count("scan_runs")?,
                  "When each scan ran and how much of the machine it covered."),
+                ("Router scan snapshots", c.query_row("SELECT count(*) FROM security_facts WHERE fact_key = 'router_snapshot'", [], |r| r.get::<_, i64>(0))?,
+                 "Gateway address, adapter, observed gateway hardware address when available, check results and evidence at the time of each scan. No router credentials."),
                 ("Listening services", count("local_listeners")?,
                  "Ports this PC listens on and which program owns each one."),
                 ("Downloaded vulnerability records", count("cve")?,
@@ -344,9 +347,9 @@ pub fn get_privacy_report(state: State<'_, AppState>) -> Result<PrivacyReport, S
         endpoints,
         never_does: vec![
             "Upload files from this PC, including anything Defender flags.".into(),
-            "Send your network's addresses, hardware addresses or device names anywhere.".into(),
+            "Upload your network inventory, hardware addresses or device names to public data feeds.".into(),
             "Send the list of programs you have installed as a list.".into(),
-            "Contact anything during a scan. Scans read only data already on this PC.".into(),
+            "Sign in to your router without separate confirmation, or test public Internet reachability during a scan.".into(),
             "Use an account, a licence check, or any form of telemetry.".into(),
             "Send anything to an AI service.".into(),
         ],
@@ -393,9 +396,9 @@ mod tests {
         // Reconstructed from the same literal used in `get_privacy_report`.
         let never = [
             "Upload files from this PC, including anything Defender flags.",
-            "Send your network's addresses, hardware addresses or device names anywhere.",
+            "Upload your network inventory, hardware addresses or device names to public data feeds.",
             "Send the list of programs you have installed as a list.",
-            "Contact anything during a scan. Scans read only data already on this PC.",
+            "Sign in to your router without separate confirmation, or test public Internet reachability during a scan.",
             "Use an account, a licence check, or any form of telemetry.",
             "Send anything to an AI service.",
         ];

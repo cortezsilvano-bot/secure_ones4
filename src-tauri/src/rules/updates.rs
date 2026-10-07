@@ -7,7 +7,7 @@
 //! that is fully patched.
 
 use crate::collectors::updates::UpdateFacts;
-use crate::findings::{Confidence, Finding, FindingBuilder, FixRisk, Severity};
+use crate::findings::{Confidence, Finding, FindingBuilder, HelpTarget, Severity};
 
 const SOURCE: &str = "windows.update";
 const CATEGORY: &str = "Updates";
@@ -74,9 +74,9 @@ pub fn evaluate(f: &UpdateFacts) -> Vec<Finding> {
             )
             .evidence(evidence)
             .remediation(
-                "Install the pending updates from Settings, under Windows Update.",
-                FixRisk::Manual,
+                "Install the pending updates from Settings, under Windows Update."
             )
+            .help(HelpTarget::WindowsUpdate)
             .source(SOURCE)
             .build(),
         );
@@ -100,7 +100,8 @@ pub fn evaluate(f: &UpdateFacts) -> Vec<Finding> {
                 "COM interface: ISystemInformation (wuapi.dll)".to_string(),
                 "RebootRequired: true".to_string(),
             ])
-            .remediation("Restart this PC when convenient.", FixRisk::Manual)
+            .remediation("Restart this PC when convenient.")
+            .help(HelpTarget::WindowsUpdate)
             .source(SOURCE)
             .build(),
         );
@@ -134,9 +135,9 @@ pub fn evaluate(f: &UpdateFacts) -> Vec<Finding> {
                         format!("Age: {age} day(s)"),
                     ])
                     .remediation(
-                        "Open Settings, then Windows Update, and select Check for updates. If it fails, the Windows Update service may be stopped or blocked by policy.",
-                        FixRisk::Manual,
+                        "Open Settings, then Windows Update, and select Check for updates. If it fails, the Windows Update service may be stopped or blocked by policy."
                     )
+                    .help(HelpTarget::WindowsUpdate)
                     .source(SOURCE)
                     .build(),
             );
@@ -157,9 +158,9 @@ pub fn evaluate(f: &UpdateFacts) -> Vec<Finding> {
                     "Last successful check: not recorded".to_string(),
                 ])
                 .remediation(
-                    "Open Settings, then Windows Update, and select Check for updates.",
-                    FixRisk::Manual,
+                    "Open Settings, then Windows Update, and select Check for updates."
                 )
+                .help(HelpTarget::WindowsUpdate)
                 .source(SOURCE)
                 .build(),
         );

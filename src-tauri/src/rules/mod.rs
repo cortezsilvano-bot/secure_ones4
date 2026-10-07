@@ -13,6 +13,7 @@ pub mod hardening;
 pub mod malware;
 pub mod network;
 pub mod router;
+pub(crate) mod router_settings;
 pub mod updates;
 pub mod vulnerabilities;
 

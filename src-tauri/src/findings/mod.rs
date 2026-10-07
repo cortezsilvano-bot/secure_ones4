@@ -42,6 +42,12 @@ impl Confidence {
 }
 
 /// How dangerous applying the fix automatically would be.
+///
+/// This describes an `Action` SENTRY will actually carry out, so it is derived
+/// from the action and never stated by a rule. A finding with no action has no
+/// risk to report: there is nothing to apply. Saying "reversible, no side
+/// effects" beside a recommendation SENTRY cannot act on describes a fix that
+/// does not exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FixRisk {
@@ -49,8 +55,77 @@ pub enum FixRisk {
     Safe,
     /// Could disrupt something the user relies on; needs a backup first.
     Caution,
-    /// We will not do this for you; we explain how.
-    Manual,
+}
+
+/// A Windows page the user can be sent to when SENTRY will not make a change
+/// itself.
+///
+/// Opening one of these changes nothing. It is the Settings or Windows Security
+/// page the finding's recommendation already describes in prose, so the user
+/// does not have to hunt for it through four menus. Each variant maps to one
+/// fixed literal target; nothing from a finding, a feed or the webview is ever
+/// interpolated into it, so this is a closed list of pages rather than a way to
+/// launch things.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HelpTarget {
+    /// Virus & threat protection settings: real-time protection, archive, USB
+    /// and script scanning, PUA, exclusions, sample submission.
+    VirusProtectionSettings,
+    /// Current threats, which lists what Defender is acting on and links to
+    /// the full protection history.
+    CurrentThreats,
+    /// Protection updates, for definition age.
+    ProtectionUpdates,
+    /// Firewall & network protection.
+    FirewallAndNetwork,
+    /// Windows Update.
+    WindowsUpdate,
+    /// Settings, System, Remote Desktop.
+    RemoteDesktop,
+    /// The Windows Features dialog, where SMBv1 is turned off.
+    WindowsFeatures,
+    /// The User Account Control notification slider.
+    UserAccountControl,
+    /// Network status, for adapter and DNS settings.
+    NetworkStatus,
+}
+
+impl HelpTarget {
+    /// What the button says. Names the destination, so the user knows where
+    /// they are being taken before they click.
+    pub fn label(&self) -> &'static str {
+        match self {
+            HelpTarget::VirusProtectionSettings => "Open virus protection settings",
+            HelpTarget::CurrentThreats => "Open current threats",
+            HelpTarget::ProtectionUpdates => "Open protection updates",
+            HelpTarget::FirewallAndNetwork => "Open firewall settings",
+            HelpTarget::WindowsUpdate => "Open Windows Update",
+            HelpTarget::RemoteDesktop => "Open Remote Desktop settings",
+            HelpTarget::WindowsFeatures => "Open Windows Features",
+            HelpTarget::UserAccountControl => "Open User Account Control",
+            HelpTarget::NetworkStatus => "Open network settings",
+        }
+    }
+
+    /// The fixed shell target. A constant in every arm, by construction.
+    pub fn target(&self) -> &'static str {
+        match self {
+            HelpTarget::VirusProtectionSettings => "windowsdefender://threatsettings",
+            HelpTarget::CurrentThreats => "windowsdefender://threat",
+            HelpTarget::ProtectionUpdates => "windowsdefender://protectionupdates",
+            HelpTarget::FirewallAndNetwork => "windowsdefender://network",
+            HelpTarget::WindowsUpdate => "ms-settings:windowsupdate",
+            HelpTarget::RemoteDesktop => "ms-settings:remotedesktop",
+            HelpTarget::NetworkStatus => "ms-settings:network-status",
+            // Two settings Windows still only exposes through a control panel
+            // applet. Both are in-box, signed Windows executables named by a
+            // literal here, and both open a dialog rather than changing
+            // anything.
+            HelpTarget::WindowsFeatures => "optionalfeatures.exe",
+            HelpTarget::UserAccountControl => "useraccountcontrolsettings.exe",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,7 +256,12 @@ pub struct Finding {
     /// does not exist, because there is no way to name one.
     pub fix_action: Option<Action>,
     pub auto_fix: bool,
+    /// Set only alongside `fix_action`, because it describes that action.
     pub auto_fix_risk: Option<FixRisk>,
+    /// Where in Windows the user carries out `remediation` themselves, when
+    /// SENTRY will not do it for them. Advice that ends "in Windows Security,
+    /// under Virus & threat protection settings" is a scavenger hunt otherwise.
+    pub help_target: Option<HelpTarget>,
     /// Verbatim observations. Never prose, never a claim about a check that
     /// did not run.
     pub evidence: Vec<String>,
@@ -226,6 +306,7 @@ impl FindingBuilder {
                 fix_action: None,
                 auto_fix: false,
                 auto_fix_risk: None,
+                help_target: None,
                 evidence: Vec::new(),
                 references: Vec::new(),
                 status: FindingStatus::Open,
@@ -257,9 +338,17 @@ impl FindingBuilder {
 
     /// What the user should do. Describing a fix does not imply SENTRY can
     /// apply it -- see `fixable_with`.
-    pub fn remediation(mut self, text: &str, risk: FixRisk) -> Self {
+    /// What the user should do. Advice only: it does not imply SENTRY can do
+    /// it, and does not set `auto_fix_risk` -- only `fixable_with` can, because
+    /// only an action has a risk.
+    pub fn remediation(mut self, text: &str) -> Self {
         self.finding.remediation = Some(text.to_string());
-        self.finding.auto_fix_risk = Some(risk);
+        self
+    }
+
+    /// The Windows page where the recommendation above is carried out.
+    pub fn help(mut self, target: HelpTarget) -> Self {
+        self.finding.help_target = Some(target);
         self
     }
 
@@ -341,7 +430,8 @@ mod tests {
         let described_only = FindingBuilder::new("X", "T", Severity::Warning, "t")
             .what("w")
             .evidence(["e".to_string()])
-            .remediation("Do it yourself in Windows Settings.", FixRisk::Manual)
+            .remediation("Do it yourself in Windows Settings.")
+            .help(HelpTarget::VirusProtectionSettings)
             .build();
 
         assert!(
@@ -353,11 +443,23 @@ mod tests {
             described_only.remediation.is_some(),
             "the advice is still shown"
         );
+        // The second half of the same bug: those 16 findings also printed a
+        // note about the automatic fix -- "reversible, with no side effects" --
+        // under advice SENTRY cannot act on. A risk belongs to an action, so
+        // with no action there is nothing to state.
+        assert!(
+            described_only.auto_fix_risk.is_none(),
+            "advice with no action has no risk to report"
+        );
+        assert!(
+            described_only.help_target.is_some(),
+            "advice naming a Windows page should link to it"
+        );
 
         let applicable = FindingBuilder::new("Y", "T", Severity::Warning, "t")
             .what("w")
             .evidence(["e".to_string()])
-            .remediation("Turn archive scanning back on.", FixRisk::Safe)
+            .remediation("Turn archive scanning back on.")
             .fixable_with(Action::EnableArchiveScanning)
             .build();
 

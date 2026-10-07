@@ -7,7 +7,7 @@
 
 use crate::collectors::network::devices::DeviceFacts;
 use crate::collectors::network::local_ports::{BindScope, Listener, LocalPortFacts};
-use crate::findings::{Confidence, Finding, FindingBuilder, FixRisk, Severity};
+use crate::findings::{Confidence, Finding, FindingBuilder, Severity};
 
 const SOURCE: &str = "network";
 const PORTS_CATEGORY: &str = "Open Ports";
@@ -124,8 +124,7 @@ pub fn evaluate_ports(f: &LocalPortFacts) -> Vec<Finding> {
             .asset(&format!("port {port}/{protocol}"))
             .evidence(evidence)
             .remediation(
-                "If you do not need this service, turn it off. If you do, make sure it requires a strong password and is not reachable from outside your home.",
-                FixRisk::Manual,
+                "If you do not need this service, turn it off. If you do, make sure it requires a strong password and is not reachable from outside your home."
             )
             .source(SOURCE)
             .build(),
@@ -231,8 +230,7 @@ pub fn evaluate_devices(f: &DeviceFacts) -> Vec<Finding> {
             .confidence(Confidence::Confirmed)
             .evidence(evidence)
             .remediation(
-                "Open Devices and mark the ones you recognise as trusted.",
-                FixRisk::Manual,
+                "Open Devices and mark the ones you recognise as trusted."
             )
             .source(SOURCE)
             .build(),
@@ -260,8 +258,7 @@ pub fn evaluate_devices(f: &DeviceFacts) -> Vec<Finding> {
                 format!("Devices affected: {}", f.devices.len()),
             ])
             .remediation(
-                "Download the vulnerability and device data from the dashboard.",
-                FixRisk::Safe,
+                "Download the vulnerability and device data from the dashboard."
             )
             .source(SOURCE)
             .build(),

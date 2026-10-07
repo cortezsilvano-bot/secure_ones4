@@ -1,7 +1,7 @@
 //! Rules over Windows hardening settings.
 
 use crate::collectors::hardening::HardeningFacts;
-use crate::findings::{Confidence, Finding, FindingBuilder, FixRisk, Severity};
+use crate::findings::{Confidence, Finding, FindingBuilder, HelpTarget, Severity};
 
 const SOURCE: &str = "windows.hardening";
 const CATEGORY: &str = "System Configuration";
@@ -21,9 +21,9 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 )
                 .evidence(f.evidence.clone())
                 .remediation(
-                    "Turn off SMB 1.0/CIFS File Sharing Support in Windows Features, then restart.",
-                    FixRisk::Caution,
+                    "Turn off SMB 1.0/CIFS File Sharing Support in Windows Features, then restart."
                 )
+                .help(HelpTarget::WindowsFeatures)
                 .reference("https://learn.microsoft.com/windows-server/storage/file-server/troubleshoot/detect-enable-and-disable-smbv1-v2-v3")
                 .source(SOURCE)
                 .build(),
@@ -43,9 +43,9 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 )
                 .evidence(f.evidence.clone())
                 .remediation(
-                    "Turn off SMB 1.0/CIFS Client in Windows Features, then restart.",
-                    FixRisk::Caution,
+                    "Turn off SMB 1.0/CIFS Client in Windows Features, then restart."
                 )
+                .help(HelpTarget::WindowsFeatures)
                 .source(SOURCE)
                 .build(),
         );
@@ -63,9 +63,9 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 )
                 .evidence(f.evidence.clone())
                 .remediation(
-                    "Turn User Account Control back on in Control Panel, under User Accounts. A restart is required.",
-                    FixRisk::Manual,
+                    "Turn User Account Control back on in Control Panel, under User Accounts. A restart is required."
                 )
+                .help(HelpTarget::UserAccountControl)
                 .source(SOURCE)
                 .build(),
         );
@@ -88,9 +88,9 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
             )
             .evidence(f.evidence.clone())
             .remediation(
-                "Set User Account Control back to its default notification level in Control Panel.",
-                FixRisk::Manual,
+                "Set User Account Control back to its default notification level in Control Panel."
             )
+            .help(HelpTarget::UserAccountControl)
             .source(SOURCE)
             .build(),
         );
@@ -135,9 +135,9 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                     "Require Network Level Authentication in System Properties, under Remote, or turn Remote Desktop off if you do not use it."
                 } else {
                     "If you do not use Remote Desktop, turn it off in Settings, under System, Remote Desktop."
-                },
-                FixRisk::Manual,
+                }
             )
+            .help(HelpTarget::RemoteDesktop)
             .source(SOURCE)
             .build(),
         );
@@ -155,8 +155,7 @@ pub fn evaluate(f: &HardeningFacts) -> Vec<Finding> {
                 )
                 .evidence(f.evidence.clone())
                 .remediation(
-                    "Disable AutoRun for all drive types in Group Policy, or set NoDriveTypeAutoRun to 0xFF.",
-                    FixRisk::Safe,
+                    "Disable AutoRun for all drive types in Group Policy, or set NoDriveTypeAutoRun to 0xFF."
                 )
                 .source(SOURCE)
                 .build(),
