@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-02T00:00:00Z",
+  "validUntil": "2026-11-01T00:00:00Z",
+  "models": [
+    "RT-AX82U",
+    "RT-AX82U_V2"
+  ],
+  "family": "gnuton",
+  "installedVersion": "3004.388.9_2-gnuton1",
+  "newerRelease": "3004.388.11_1-gnuton1",
+  "releaseSource": "https://github.com/gnuton/asuswrt-merlin.ng/releases/tag/3004.388.11_1-gnuton1",
+  "advisories": [
+    {
+      "id": "CVE-2025-2492",
+      "disposition": "fix_documented",
+      "detail": "The release-pinned GNUton changelog identifies the AiCloud fix in the 388.9_2 baseline used by this exact GNUton build. This documents the published fix, not verification of the installed binary.",
+      "sources": [
+        "https://github.com/gnuton/asuswrt-merlin.ng/blob/e8493201a1a0f983c7d079a5a45f02e2c191fede/Changelog-NG.txt"
+      ]
+    },
+    {
+      "id": "CVE-2024-9143",
+      "disposition": "fix_documented",
+      "detail": "The release-pinned baseline changelog records an OpenSSL backport before this build. No exploitation or installed-binary verification was performed.",
+      "sources": [
+        "https://github.com/gnuton/asuswrt-merlin.ng/blob/e8493201a1a0f983c7d079a5a45f02e2c191fede/Changelog-NG.txt"
+      ]
+    },
+    {
+      "id": "CVE-2025-9230",
+      "disposition": "review_required",
+      "detail": "A later GNUton baseline documents the OpenSSL fix. The upstream issue involves password-encrypted CMS processing. Component inclusion, reachable functionality and exploitability on this installed build are not established; review the later firmware release.",
+      "sources": [
+        "https://github.com/gnuton/asuswrt-merlin.ng/blob/3004.388.11_1-gnuton1/Changelog-NG.txt",
+        "https://openssl-library.org/news/secadv/20250930.txt"
+      ]
+    }
+  ],
+  "vendorEol": {
+    "authority": "ASUS",
+    "region": "EU",
+    "models": [
+      "RT-AX82U",
+      "RT-AX82U_V2"
+    ],
+    "source": "https://www.asus.com/event/network/EOL-product/",
+    "detail": "ASUS lists both model variants as end-of-life only in the EU. This does not establish GNUton project support status or ASUS support outside that region."
+  }
+}
